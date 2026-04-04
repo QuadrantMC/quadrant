@@ -42,6 +42,7 @@ export interface LocalModpack {
   modLoader: ModLoader;
   isApplied: boolean;
   lastSynced: number;
+  modpackId?: string | null;
   mods: LocalMod[];
   unknownMods: boolean;
 }
@@ -193,8 +194,11 @@ export interface AccountInfo {
 export interface AccountNotification {
   notification_id: string;
   user_id: string;
+  notification_type?: string | null;
+  resource_id?: string | null;
   message: string;
-  created_at: number;
+  created_at: string;
+  created_at_unix: number;
   read: boolean;
 }
 

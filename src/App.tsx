@@ -472,10 +472,7 @@ function App() {
   }, []);
 
   const updateContentWithTransition = (update: () => void) => {
-    if (
-      !isLinux &&
-      typeof document.startViewTransition === "function"
-    ) {
+    if (!isLinux && typeof document.startViewTransition === "function") {
       document.startViewTransition(update);
       return;
     }
@@ -735,7 +732,6 @@ function App() {
                     )}
                     <div className="bg-slate-800 p-2 flex rounded-full items-center justify-center">
                       <Notifications
-                        config={config}
                         snackBarHistory={snackBarHistory}
                         setSnackbarHistory={setSnackbarHistory}
                       />

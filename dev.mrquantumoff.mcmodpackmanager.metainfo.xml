@@ -15,9 +15,9 @@
       NOTE: This app and its developer are not affiliated with Mojang Studios or Microsoft.
     </p>
   </description>
-  <url type="homepage">https://mrquantumoff.dev/projects/quadrant</url>
-  <url type="vcs-browser">https://github.com/mrquantumoff/quadrant</url>
-  <url type="bugtracker">https://github.com/mrquantumoff/quadrant/issues</url>
+  <url type="homepage">https://usequadrant.dev</url>
+  <url type="vcs-browser">https://github.com/quadrantmc/quadrant</url>
+  <url type="bugtracker">https://github.com/quadrantmc/quadrant/issues</url>
   <categories>
     <category>Game</category>
     <category>Utility</category>
@@ -43,6 +43,14 @@
   </branding>
 
   <releases>
+
+    <release date="2026-03-28" version="26.4.0">
+      <url type="details">https://blog.mrquantumoff.dev</url>
+      <description>
+        <p>Better Quadrant Sync</p>
+        <p>Dependency updates</p>
+      </description>
+    </release>
 
     <release date="2026-03-19" version="26.3.2">
       <url type="details">https://blog.mrquantumoff.dev</url>
@@ -1139,17 +1147,17 @@
   <screenshots>
     <screenshot type="default">
       <image>
-        https://github.com/mrquantumoff/quadrant/raw/next/Screenshots/1.png
+        https://github.com/quadrantmc/quadrant/raw/next/Screenshots/1.png
       </image>
     </screenshot>
     <screenshot type="default">
       <image>
-        https://github.com/mrquantumoff/quadrant/raw/next/Screenshots/2.png
+        https://github.com/quadrantmc/quadrant/raw/next/Screenshots/2.png
       </image>
     </screenshot>
     <screenshot type="default">
       <image>
-        https://github.com/mrquantumoff/quadrant/raw/next/Screenshots/3.png
+        https://github.com/quadrantmc/quadrant/raw/next/Screenshots/3.png
       </image>
     </screenshot>
   </screenshots>

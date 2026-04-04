@@ -3,58 +3,58 @@
 @import "tailwindcss";
 
 html {
-	font-family: "Inter";
-	@apply bg-slate-900 text-slate-50 overflow-x-hidden font-normal rounded-4xl;
-	font-synthesis: none !important;
+  font-family: "Inter";
+  @apply bg-slate-900 text-slate-50 overflow-x-hidden font-normal rounded-4xl;
+  font-synthesis: none !important;
 }
 
 select {
-	-webkit-appearance: none;
-	appearance: unset;
+  -webkit-appearance: none;
+  appearance: unset;
 }
 
 option {
-	-webkit-appearance: none;
-	appearance: unset;
+  -webkit-appearance: none;
+  appearance: unset;
 }
 
 .input {
-	@apply bg-slate-700 px-4 py-2 rounded-full focus:bg-slate-800 hover:bg-slate-800 hover:outline-2 focus:outline-2 outline-slate-700 transition-shadow duration-150 ease-linear;
+  @apply bg-slate-700 px-4 py-2 rounded-full focus:bg-slate-800 hover:bg-slate-800 hover:outline-2 focus:outline-2 outline-slate-700 transition-shadow duration-150 ease-linear;
 }
 
 @font-face {
-	font-family: "Inter";
-	src: local("Inter"), url("$assets/Inter-Font.ttf"), url("./Inter-Font.ttf");
+  font-family: "Inter";
+  src: local("Inter"), url("$assets/Inter-Font.ttf"), url("./Inter-Font.ttf");
 }
 
 ::-webkit-scrollbar {
-	@apply transition-colors ease-linear duration-300 bg-slate-900 hover:bg-slate-800;
+  @apply transition-colors ease-linear duration-300 bg-slate-900 hover:bg-slate-800;
 }
 
 ::-webkit-scrollbar-track {
-	max-height: 84px;
-	@apply bg-slate-900;
+  max-height: 84px;
+  @apply bg-slate-900;
 }
 
 ::-webkit-scrollbar-thumb {
-	max-height: 12px;
-	@apply bg-slate-500 hover:bg-slate-600 rounded-4xl mx-2 h-5;
+  max-height: 12px;
+  @apply bg-slate-500 hover:bg-slate-600 rounded-4xl mx-2 h-5;
 }
 
 .page {
-	width: 100%;
+  width: 100%;
 }
 
 .center {
-	@apply grid place-items-center;
+  @apply grid place-items-center;
 }
 
 .disableSelect {
-	-webkit-user-select: none; /* Safari */
-	-ms-user-select: none; /* IE 10 and IE 11 */
-	user-select: none; /* Standard syntax */
+  -webkit-user-select: none; /* Safari */
+  -ms-user-select: none; /* IE 10 and IE 11 */
+  user-select: none; /* Standard syntax */
 }
 
 button {
-	@apply cursor-pointer transition-shadow duration-150 ease-linear;
+  @apply cursor-pointer transition-shadow duration-150 ease-linear;
 }

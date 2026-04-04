@@ -1,3 +1,5 @@
+<!-- @format -->
+
 # Privacy Policy
 
 ## This privacy policy is effective for Quadrant v25.3.2/26.02.2025 (26th of February 2025)+
@@ -7,7 +9,7 @@
 ### The data that the Quadrant app uses.
 
 - This app modifies your minecraft folder
-- By default this app collects data on Windows. However, on GNU+Linux data is not being collected by default. You can let or prohibit the app to collect analytics and diagnostics from your PC by going to the settings and explicitly enabling or disabling optional data collection. Meanwhile my [website](https://mrquantumoff.dev) and my [API](https://api.mrquantumoff.dev) are proprietary, I can 100% guarantee that your personal info (e.g your hardware id or when did your device sent the diagnostics/analytics report) will not be sold to third parties.
+- By default this app collects data on Windows. However, on GNU+Linux data is not being collected by default. You can let or prohibit the app to collect analytics and diagnostics from your PC by going to the settings and explicitly enabling or disabling optional data collection. Meanwhile my [website](https://mrquantumoff.dev) and my [API](https://api.usequadrant.dev) are proprietary, I can 100% guarantee that your personal info (e.g your hardware id or when did your device sent the diagnostics/analytics report) will not be sold to third parties.
 - Why does the app need "hardwareId" and "date" fields? In order to not duplicate the same machine 100 times across the database and in order to remove super old data in the future.
 
 ```rust
@@ -25,9 +27,9 @@ pub struct AppInfo {
 }
 ```
 
-This an example of which data is being collected by the app and can be accessed with https://api.mrquantumoff.dev/api/v3/quadrant/usage/get?hardware_id=YOURHARDWAREID.
+This an example of which data is being collected by the app and can be accessed with https://api.usequadrant.dev/api/v3/quadrant/usage/get?hardware_id=YOURHARDWAREID.
 
-However, when someone is asking for general usage info (https://api.mrquantumoff.dev/api/v3/quadrant/usage/get) without any query params, they can only get this struct
+However, when someone is asking for general usage info (https://api.usequadrant.dev/api/v3/quadrant/usage/get) without any query params, they can only get this struct
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

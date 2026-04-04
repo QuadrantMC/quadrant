@@ -32,6 +32,8 @@ export default function SettingsPage() {
   // const [rssFeeds, setRssFeeds] = useState(false);
   // const [silentNews, setSilentNews] = useState(false);
   const [autoQuadrantSync, setAutoQuadrantSync] = useState(false);
+  const [showModpackUpdateNotifications, setShowModpackUpdateNotifications] =
+    useState(true);
   const [showUnupgradeableMods, setShowUnupgradeableMods] = useState(false);
   const [experimentalFeatures, setExperimentalFeatures] = useState(false);
   const [syncSettings, setSyncSettings] = useState(false);
@@ -57,6 +59,9 @@ export default function SettingsPage() {
       );
       setAutoQuadrantSync(
         (await box.get<boolean>("autoQuadrantSync")) ?? false,
+      );
+      setShowModpackUpdateNotifications(
+        (await box.get<boolean>("showModpackUpdateNotifications")) ?? true,
       );
 
       setShowUnupgradeableMods(
@@ -371,6 +376,25 @@ export default function SettingsPage() {
           />
         </Switch>
         <Label className="ml-4">{t("autoQuadrantSync")}</Label>
+      </Field>
+      <Field className="flex items-center font-bold my-4">
+        <Switch
+          className={
+            "group inline-flex h-8 align-middle w-16 rounded-full bg-slate-700 transition data-checked:bg-emerald-800 hover:bg-slate-600 hover:data-checked:bg-emerald-700 "
+          }
+          checked={showModpackUpdateNotifications}
+          onChange={async (newValue) => {
+            setShowModpackUpdateNotifications(newValue);
+            await box.set("showModpackUpdateNotifications", newValue);
+            await box.save();
+          }}
+        >
+          <span
+            aria-hidden="true"
+            className="pointer-events-none inline-block size-8 translate-x-0 rounded-full bg-slate-300 ring-0 shadow-lg transition duration-200 ease-in-out group-data-checked:translate-x-8"
+          />
+        </Switch>
+        <Label className="ml-4">{t("showModpackUpdateNotifications")}</Label>
       </Field>
       <Field className="flex items-center font-bold my-4">
         <Switch

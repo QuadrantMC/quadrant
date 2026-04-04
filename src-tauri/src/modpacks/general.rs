@@ -44,12 +44,14 @@ pub async fn install_modpack(
 pub async fn set_modpack_sync_date(
     time: u64,
     modpack: String,
+    modpack_id: Option<String>,
     app: AppHandle,
 ) -> Result<(), tauri::Error> {
     quadrant_core::modpacks::set_modpack_sync_date(
         &mc_folder(&app).map_err(tauri::Error::from)?,
         time,
         &modpack,
+        modpack_id.as_deref(),
     )
     .map_err(tauri::Error::from)
 }

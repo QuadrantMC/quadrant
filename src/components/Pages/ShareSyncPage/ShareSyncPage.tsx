@@ -16,12 +16,14 @@ export interface IShareSyncContext {
   changeTab: (index: number) => void;
   setModpack: (modpack: InstalledModpack) => void;
   setSync: (time: number) => void;
+  setModpackId: (modpackId: string | null) => void;
 }
 
 export const ShareSyncContext = createContext<IShareSyncContext>({
   changeTab: () => {},
   setModpack: () => {},
   setSync: () => {},
+  setModpackId: () => {},
 });
 
 export default function ShareSyncPage() {
@@ -34,35 +36,63 @@ export default function ShareSyncPage() {
   >();
 
   const [modpackSync, setModpackSync] = useState<number | null>(null);
+  const [modpackId, setModpackId] = useState<string | null>(null);
 
   const contentContext = useContext(ContentContext);
 
   useEffect(() => {
+    let isUnmounted = false;
+    const cleanupFns: Array<() => void> = [];
+
     const effect = async () => {
       try {
         const accountInfo = await getAccountInfo();
-        if (accountInfo.quadrant_sync_limit !== 0) {
+        if (!isUnmounted && accountInfo.quadrant_sync_limit !== 0) {
           setSyncActive(true);
         }
-        await listen("quadrantShareSubmission", async (event: any) => {
-          const usesLeft = event.payload.uses_left;
-          contentContext.setSnackbar({
-            message: (
-              <span className="flex">
-                <MdCheck className="w-6 h-6 mx-2" />
-                {t("copiedToClipboard", { amount: usesLeft })}
-              </span>
-            ),
-            className: "bg-emerald-700 rounded-4xl",
-            timeout: 5000,
-          });
-        });
+
+        const unlisten = await listen(
+          "quadrantShareSubmission",
+          async (event: any) => {
+            const usesLeft = event.payload.uses_left;
+            if (isUnmounted) {
+              return;
+            }
+            contentContext.setSnackbar({
+              message: (
+                <span className="flex">
+                  <MdCheck className="w-6 h-6 mx-2" />
+                  {t("copiedToClipboard", { amount: usesLeft })}
+                </span>
+              ),
+              className: "bg-emerald-700 rounded-4xl",
+              timeout: 5000,
+            });
+          },
+        );
+        if (isUnmounted) {
+          unlisten();
+        } else {
+          cleanupFns.push(unlisten);
+        }
       } catch (e) {
         console.error(e);
       }
     };
     effect().catch(console.error);
-  }, []);
+
+    return () => {
+      isUnmounted = true;
+      while (cleanupFns.length > 0) {
+        const cleanup = cleanupFns.pop();
+        try {
+          cleanup?.();
+        } catch (error) {
+          console.error(error);
+        }
+      }
+    };
+  }, [contentContext, t]);
 
   const MotionTab = motion(Tab);
 
@@ -71,13 +101,14 @@ export default function ShareSyncPage() {
       initial={{ y: 24, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       exit={{ y: 24, opacity: 0 }}
-      className="flex flex-1 flex-col items-center w-full h-full transform-gpu [backface-visibility:hidden] [will-change:transform,opacity]"
+      className="flex flex-1 flex-col items-center w-full h-full transform-gpu backface-hidden will-change-[transform,opacity]"
     >
       <ShareSyncContext.Provider
         value={{
           changeTab: (index) => setSelectedTab(index),
           setModpack: (modpack) => setPreselectedModpack(modpack),
           setSync: (time) => setModpackSync(time),
+          setModpackId: (newModpackId) => setModpackId(newModpackId),
         }}
       >
         <TabGroup
@@ -101,6 +132,7 @@ export default function ShareSyncPage() {
                   onClick={() => {
                     setModpackSync(null);
                     setPreselectedModpack(undefined);
+                    setModpackId(null);
                   }}
                   whileHover={{ scale: 1.1, y: -5 }}
                   whileTap={{ scale: 0.9 }}
@@ -127,6 +159,7 @@ export default function ShareSyncPage() {
               <SharePage
                 preselectedModpack={preselectedModpack}
                 modpackSync={modpackSync}
+                modpackId={modpackId}
               />
             </TabPanel>
             <TabPanel className={"w-full h-full flex-col flex items-center"}>

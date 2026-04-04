@@ -117,6 +117,8 @@ pub struct LocalModpack {
     pub is_applied: bool,
     /// Last successful sync time in milliseconds since the Unix epoch.
     pub last_synced: i64,
+    /// Stable synced modpack identifier when this modpack is linked to Quadrant Sync.
+    pub modpack_id: Option<String>,
 }
 
 impl From<LocalModpack> for InstalledModpack {
@@ -135,6 +137,9 @@ impl From<LocalModpack> for InstalledModpack {
 pub struct SyncInfo {
     /// Last successful sync time in seconds since the Unix epoch.
     pub last_synced: i64,
+    /// Stable synced modpack identifier when known.
+    #[serde(default)]
+    pub modpack_id: Option<String>,
 }
 
 impl From<(InstalledModpack, bool, i64)> for LocalModpack {
@@ -146,6 +151,7 @@ impl From<(InstalledModpack, bool, i64)> for LocalModpack {
             mods: modpack.0.mods,
             is_applied: modpack.1,
             last_synced: modpack.2,
+            modpack_id: None,
             unknown_mods: false,
         }
     }

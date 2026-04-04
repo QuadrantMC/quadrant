@@ -22,11 +22,11 @@
         <img width="200" src="https://get.microsoft.com/images/en-us%20light.svg" alt="Download on Microsoft Store" />
 </a>
 
-##### Please note that for now, aarch64 builds are not on MS Store
+##### The app is also packaged unofficially on [AUR](https://aur.archlinux.org/packages/quadrant-bin), but only Flathub, MS Store and Windows setup-based distributions are considered officialy supported, use other distribution methods at your risk.
 
 #### OR
 
-[Grab the latest build manually (Linux/Windows on x86_64/aarch64)](https://github.com/mrquantumoff/quadrant/releases/latest)
+[Grab the latest build manually (Linux/Windows on x86_64/aarch64)](https://github.com/quadrantmc/quadrant/releases/latest)
 
 ### Working features
 

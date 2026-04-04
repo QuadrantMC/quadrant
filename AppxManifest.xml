@@ -8,7 +8,7 @@
     xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
     IgnorableNamespaces="uap uap3 uap10 desktop rescap">
-    <Identity Name="58734MrQuantumOFFDemirYer.MinecraftModpackManagerR" Version="26.3.2.0"
+    <Identity Name="58734MrQuantumOFFDemirYer.MinecraftModpackManagerR" Version="26.4.0.0"
         Publisher="CN=010914FC-8843-4963-A3FE-E3E06E6D9F53" ProcessorArchitecture="x64" />
     <Properties>
         <DisplayName>QuadrantMC</DisplayName>

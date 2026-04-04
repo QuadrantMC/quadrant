@@ -8,7 +8,7 @@ pub mod quadrant_share;
 pub mod quadrant_sync;
 
 /// Base URL for the Quadrant backend API.
-pub const QNT_BASE_URL: &str = "https://api.mrquantumoff.dev/api/v3";
+pub const QNT_BASE_URL: &str = "https://api.usequadrant.dev/api/v3";
 /// Stable keyring service name used by the current app.
 pub const KEYRING_SERVICE: &str = "dev.mrquantumoff.mcmodpackmanager";
 

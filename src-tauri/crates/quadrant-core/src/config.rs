@@ -32,6 +32,8 @@ pub struct AppConfig {
     pub silent_news: bool,
     /// Whether automatic Quadrant sync is enabled.
     pub auto_quadrant_sync: bool,
+    /// Whether modpack update notifications should be displayed.
+    pub show_modpack_update_notifications: bool,
     /// Whether to show mods that cannot currently be upgraded.
     pub show_unupgradeable_mods: bool,
     /// Last selected page index in the current app navigation.
@@ -101,6 +103,7 @@ pub fn default_app_config() -> AppConfig {
         rss_feeds: true,
         silent_news: false,
         auto_quadrant_sync: true,
+        show_modpack_update_notifications: true,
         show_unupgradeable_mods: false,
         last_page: 0,
         extended_navigation: false,
@@ -144,6 +147,11 @@ pub fn ensure_default_app_config(store: &impl SettingsStore) -> Result<()> {
     ensure_bool(store, "rssFeeds", defaults.rss_feeds)?;
     ensure_bool(store, "silentNews", defaults.silent_news)?;
     ensure_bool(store, "autoQuadrantSync", defaults.auto_quadrant_sync)?;
+    ensure_bool(
+        store,
+        "showModpackUpdateNotifications",
+        defaults.show_modpack_update_notifications,
+    )?;
     ensure_bool(
         store,
         "showUnupgradeableMods",
@@ -236,6 +244,10 @@ mod tests {
 
         assert_eq!(store.get_bool("clipIcons").unwrap(), Some(true));
         assert_eq!(store.get_bool("curseforge").unwrap(), Some(true));
+        assert_eq!(
+            store.get_bool("showModpackUpdateNotifications").unwrap(),
+            Some(true)
+        );
         assert_eq!(store.get_i64("cacheKeepAlive").unwrap(), Some(30));
         assert!(store.get_string("hardwareId").unwrap().is_some());
         assert!(

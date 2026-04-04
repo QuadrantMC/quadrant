@@ -1,3 +1,5 @@
+<!-- @format -->
+
 ## Quadrant ID Terms of Service
 
 ### 1. Acceptance of Terms
@@ -28,6 +30,6 @@ Quadrant ID reserves the right to modify or replace these Terms at any time. It 
 
 ### 7. Contact Information
 
-If you have any questions about these Terms, please contact us at quadrant@bultek.com.ua.
+If you have any questions about these Terms, please contact us at help@usequadrant.dev.
 
 By using Quadrant ID, you acknowledge that you have read, understood, and agree to be bound by these Terms of Service.

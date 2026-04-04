@@ -42,7 +42,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'blacksmith-4vcpu-ubuntu-2404' || matrix.platform == 'blacksmith-4vcpu-ubuntu-2404-arm'
+        if: contains(matrix.platform, 'ubuntu')
         run: |
           sudo apt update
           sudo apt install -y libwebkit2gtk-4.1-dev xdg-utils libappindicator3-dev librsvg2-dev patchelf libsecret-1-dev
@@ -64,8 +64,7 @@ jobs:
           QUADRANT_API_KEY: ${{ secrets.QUADRANT_API_KEY }}
           QUADRANT_OAUTH2_CLIENT_ID: ${{ secrets.QUADRANT_OAUTH2_CLIENT_ID }}
           QUADRANT_OAUTH2_CLIENT_SECRET: ${{ secrets.QUADRANT_OAUTH2_CLIENT_SECRET }}
-          NO_STRIP: ${{ (matrix.platform == 'blacksmith-4vcpu-ubuntu-2404' || matrix.platform == 'blacksmith-4vcpu-ubuntu-2404-arm') && 'true' }}
-
+          NO_STRIP: ${{ contains(matrix.platform, 'ubuntu') && 'true' }}
         with:
           releaseName: "Quadrant v__VERSION__"
           releaseBody: "See the assets to download this version and install. Check out the [changelog on my blog](https://blog.mrquantumoff.dev)"
@@ -85,7 +84,7 @@ jobs:
       tag: ${{ github.ref_name }}
 
   submit_update:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     needs: publish-tauri
     if: endsWith(github.ref_name, '-flatpak') == false || endsWith(github.ref_name, '-msstore') == false
     steps:
@@ -103,4 +102,4 @@ jobs:
           VERSION: ${{github.ref_name}}
           CHANNEL: ${{steps.split.outputs._0}}
         run: |
-          curl -X PUT --header 'Authorization: ${{secrets.VERSION_UPDATE_TRIGGER_TOKEN}}' https://api.mrquantumoff.dev/api/any/quadrant/add_updates/$CHANNEL/$VERSION
+          curl -X PUT --header 'Authorization: ${{secrets.VERSION_UPDATE_TRIGGER_TOKEN}}' https://api.usequadrant.dev/api/any/quadrant/add_updates/$CHANNEL/$VERSION

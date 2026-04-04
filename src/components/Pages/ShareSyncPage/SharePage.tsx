@@ -21,11 +21,13 @@ import { invoke } from "@tauri-apps/api/core";
 export interface SharePageProps {
   preselectedModpack: InstalledModpack | undefined;
   modpackSync: number | null;
+  modpackId: string | null;
 }
 
 export default function SharePage({
   preselectedModpack,
   modpackSync,
+  modpackId,
 }: SharePageProps) {
   const [modpack, setModpack] = useState<InstalledModpack | undefined>(
     undefined,
@@ -56,6 +58,7 @@ export default function SharePage({
       await invoke("set_modpack_sync_date", {
         time: modpackSync,
         modpack: modpack!.name,
+        modpackId: modpackId,
       });
     }
   };

@@ -1,12 +1,15 @@
 [package]
 name = "quadrant_next"
-version = "26.3.2-stable"
+version.workspace = true
 description = "An easy way to manage your Minecraft mods and modpacks"
 authors = ["Demir Yerli <me@mrquantumoff.dev>"]
 edition = "2024"
 
 [workspace]
 members = ["crates/quadrant-core"]
+
+[workspace.package]
+version = "26.4.0-stable"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -47,13 +50,17 @@ tauri-plugin-fs = { version = "2.4.5", features = ["watch"] }
 tauri-plugin-os = "2.3.2"
 rss = "2.0.12"
 tauri-plugin-store = "2.4.2"
-uuid = { version = "1.22.0", features = ["v7"] }
+uuid = { version = "1.23.0", features = ["v7"] }
 tauri-plugin-http = "2.5.7"
 tokio = { version = "1.50.0", features = ["full"] }
 urlencoding = "2.1.3"
 open = "5.3.3"
 futures = { version = "0.3.32" }
-sha1 = "0.10.6"
+tokio-tungstenite = { version = "0.29.0", features = [
+    "rustls-tls-webpki-roots",
+    "connect",
+] }
+sha1 = "0.11.0"
 hex = "0.4.3"
 colog = "1.4.0"
 tauri-plugin-deep-link = { version = "2.4.7" }
@@ -81,7 +88,8 @@ reqwest = { version = "0.13.2", features = [
 ] }
 once_cell = "1.21.4"
 tauri-plugin-oauth = "2"
-zip = "8.2.0"
+zip = "8.4.0"
+url = { version = "2.5.8", features = ["serde", "std"] }
 
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

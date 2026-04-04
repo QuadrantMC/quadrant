@@ -5,6 +5,7 @@ import { useContext, useEffect, useState } from "react";
 import { AccountInfo } from "../../../intefaces";
 import { clearAccountToken, getAccountInfo, openIn } from "../../../tools";
 import Button from "../../core/Button";
+import CircularProgress from "../../core/CircularProgress";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { LazyStore } from "@tauri-apps/plugin-store";
@@ -17,42 +18,79 @@ import { invoke } from "@tauri-apps/api/core";
 
 export default function AccountPage() {
   const { t } = useTranslation();
-  const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null);
+  const [accountInfo, setAccountInfo] = useState<
+    AccountInfo | null | undefined
+  >(undefined);
+  const [loginWarning, setLoginWarning] = useState<string | null>(null);
 
-  const updateAccountInfo = async () => {
+  const updateAccountInfo = async (showLoader = true) => {
+    if (showLoader) {
+      setAccountInfo(undefined);
+    }
     try {
-      setAccountInfo(await getAccountInfo());
-    } catch (e) {
+      const newAccountInfo = await getAccountInfo();
+      setAccountInfo(newAccountInfo);
+      setLoginWarning(null);
+    } catch (error) {
+      console.error("Failed to get account info", error);
       setAccountInfo(null);
     }
   };
 
-  useEffect(() => {
-    listen<string>("recheckAccountToken", async (_) => {
-      try {
-        setAccountInfo(await getAccountInfo());
-      } catch (e) {
-        setAccountInfo(null);
-      }
-    });
-
-    const effect = async () => {
-      try {
-        const newAccountInfo = await getAccountInfo();
-        console.log("Account info: " + newAccountInfo);
-        setAccountInfo(newAccountInfo);
-      } catch (e) {
-        setAccountInfo(null);
-      }
-    };
-    effect().catch(console.error);
-  }, []);
-
   const config = new LazyStore("config.json");
-
   const context = useContext(ContentContext);
 
-  //   const;
+  const showLoginFailureWarning = () => {
+    const warningMessage = t("accountLoginFailed");
+    setLoginWarning(warningMessage);
+    context.setSnackbar({
+      message: warningMessage,
+      className: "bg-red-700 text-white rounded-4xl",
+      timeout: 6000,
+    });
+  };
+
+  useEffect(() => {
+    let isUnmounted = false;
+    let unlistenRecheck: (() => void) | null = null;
+
+    const effect = async () => {
+      unlistenRecheck = await listen<string>(
+        "recheckAccountToken",
+        async () => {
+          if (!isUnmounted) {
+            await updateAccountInfo();
+          }
+        },
+      );
+
+      await updateAccountInfo();
+    };
+
+    effect().catch(console.error);
+
+    return () => {
+      isUnmounted = true;
+      unlistenRecheck?.();
+    };
+  }, []);
+
+  if (accountInfo === undefined) {
+    return (
+      <div className="flex flex-1 h-full w-full items-center justify-center">
+        <div className="flex w-[75%] max-w-4xl flex-col items-center justify-center rounded-[2rem] bg-slate-800 px-6 py-10 text-center shadow-2xl">
+          <CircularProgress />
+          <h1 className="mt-6 text-4xl font-extrabold">
+            {t("loadingAccount")}
+          </h1>
+          <p className="mt-4 max-w-2xl text-lg text-slate-300">
+            {t("loadingAccountDetails")}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return accountInfo !== null ? (
     <>
       <div className="flex flex-col items-center justify-center align-middle flex-1 h-full">
@@ -78,7 +116,8 @@ export default function AccountPage() {
             className="bg-red-700 hover:bg-red-800 h-min mx-2 w-full"
             onClick={async () => {
               await clearAccountToken();
-              updateAccountInfo();
+              setLoginWarning(null);
+              updateAccountInfo(false);
             }}
           >
             {t("signout")}
@@ -100,9 +139,15 @@ export default function AccountPage() {
         <div className="bg-slate-800 rounded-4xl p-2 my-4">
           <h1 className="font-extrabold text-4xl my-2">{t("signIn")}</h1>
         </div>
+        {loginWarning !== null && (
+          <div className="my-4 rounded-4xl border border-red-400/40 bg-red-950/60 p-4 text-left">
+            <p className="text-base font-bold text-red-100">{loginWarning}</p>
+          </div>
+        )}
         <div className="w-full flex flex-row">
           <Button
             onClick={async () => {
+              setLoginWarning(null);
               const randomString = Math.random().toString(36).substring(2, 26);
 
               await config.set("oauthState", randomString);
@@ -143,25 +188,30 @@ export default function AccountPage() {
                     console.log("State: " + oAuthState);
                     console.log("Provided state: " + providedState);
                     if (providedState !== oAuthState) {
-                      return;
+                      throw new Error("OAuth state mismatch");
                     }
                     const code = url.searchParams.get("code");
                     console.log("Code: " + code);
                     if (code === null) {
-                      return;
+                      throw new Error("Missing OAuth code");
                     }
+                    setAccountInfo(undefined);
                     await invoke("oauth2_login", {
                       code: code,
                       redirectUri: redirectUri,
                     });
-                  } catch (e) {
-                    console.error(e);
+                  } catch (error) {
+                    console.error(error);
+                    setAccountInfo(null);
+                    showLoginFailureWarning();
+                  } finally {
+                    await cancel(port);
+                    unlistenOAuth?.();
                   }
-                  await cancel(port);
-                  unlistenOAuth?.();
                 });
               } catch (error) {
                 console.error("Error starting OAuth server:", error);
+                showLoginFailureWarning();
               }
             }}
             className="bg-sky-500 hover:bg-sky-800 w-full mx-2"
@@ -190,7 +240,7 @@ export default function AccountPage() {
           className="bg-slate-700 hover:bg-slate-800 w-full h-full flex flex-row items-center justify-center text-lg"
           onClick={async () => {
             openIn(
-              "https://github.com/mrquantumoff/quadrant/blob/master/QUADRANT-ID-TOS.md",
+              "https://github.com/quadrantmc/quadrant/blob/master/QUADRANT-ID-TOS.md",
             );
           }}
         >

@@ -11,7 +11,6 @@ use crate::{
 use anyhow::anyhow;
 use chrono::Utc;
 use futures::StreamExt;
-use serde_json::json;
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -42,6 +41,7 @@ pub fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<LocalModpac
         let modpack_config = path.join("modConfig.json");
         let modpack_sync = path.join("quadrantSync.json");
         let mut last_synced = 0_i64;
+        let mut modpack_id = None;
         let name = path.file_name().unwrap().to_string_lossy().to_string();
 
         if hide_free && name == "free" {
@@ -62,6 +62,7 @@ pub fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<LocalModpac
                 mod_loader: ModLoader::Unknown,
                 is_applied,
                 last_synced,
+                modpack_id: None,
                 unknown_mods: true,
             });
             continue;
@@ -74,6 +75,7 @@ pub fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<LocalModpac
             let reader = std::io::BufReader::new(sync_info);
             let sync_info: SyncInfo = serde_json::from_reader(reader)?;
             last_synced = sync_info.last_synced * 1000;
+            modpack_id = sync_info.modpack_id;
         }
 
         let modpack_config = std::fs::File::open(modpack_config)?;
@@ -97,6 +99,7 @@ pub fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<LocalModpac
         let mut modpack = parsed?;
         modpack.name = name;
         let mut modpack = LocalModpack::from((modpack, is_applied, last_synced));
+        modpack.modpack_id = modpack_id;
         let expected_files = modpack.mods.len() + extra_files;
         if expected_files < file_amount {
             modpack.unknown_mods = true;
@@ -308,11 +311,19 @@ pub fn delete_mod(
     Ok(modpack)
 }
 
-/// Persists the last sync time for a modpack.
-pub fn set_modpack_sync_date(mc_folder: &Path, time: u64, modpack: &str) -> Result<()> {
+/// Persists the sync metadata for a modpack.
+pub fn set_modpack_sync_date(
+    mc_folder: &Path,
+    time: u64,
+    modpack: &str,
+    modpack_id: Option<&str>,
+) -> Result<()> {
     std::fs::write(
         modpack_path(mc_folder, modpack).join("quadrantSync.json"),
-        serde_json::to_string_pretty(&json!({ "last_synced": time }))?,
+        serde_json::to_string_pretty(&SyncInfo {
+            last_synced: time as i64,
+            modpack_id: modpack_id.map(ToOwned::to_owned),
+        })?,
     )?;
     Ok(())
 }
@@ -562,9 +573,10 @@ mod tests {
         .unwrap();
         assert_eq!(updated.name, "beta");
 
-        set_modpack_sync_date(&mc_folder, 42, "beta").unwrap();
+        set_modpack_sync_date(&mc_folder, 42, "beta", Some("modpack-123")).unwrap();
         let listed = get_modpacks(&mc_folder, false).unwrap();
         assert_eq!(listed[0].last_synced, 42_000);
+        assert_eq!(listed[0].modpack_id.as_deref(), Some("modpack-123"));
 
         delete_mod(&mc_folder, &listed, "beta", "mod-1").unwrap();
         let listed = get_modpacks(&mc_folder, false).unwrap();
@@ -572,6 +584,32 @@ mod tests {
 
         delete_modpack(&mc_folder, &listed, "beta").unwrap();
         assert!(get_modpacks(&mc_folder, false).unwrap().is_empty());
+    }
+
+    #[test]
+    fn get_modpacks_reads_legacy_sync_metadata_without_modpack_id() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        std::fs::create_dir_all(modpack_path(&mc_folder, "legacy")).unwrap();
+        std::fs::write(
+            modpack_path(&mc_folder, "legacy").join("modConfig.json"),
+            serde_json::to_string_pretty(&InstalledModpack {
+                name: "legacy".to_string(),
+                version: "1.20.1".to_string(),
+                mod_loader: ModLoader::Fabric,
+                mods: Vec::new(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            modpack_path(&mc_folder, "legacy").join("quadrantSync.json"),
+            r#"{"last_synced":99}"#,
+        )
+        .unwrap();
+
+        let listed = get_modpacks(&mc_folder, false).unwrap();
+        assert_eq!(listed[0].last_synced, 99_000);
+        assert_eq!(listed[0].modpack_id, None);
     }
 
     #[test]

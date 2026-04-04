@@ -57,6 +57,7 @@ This document freezes the backend-facing surface while the Rust backend is extra
 - `quadrantExportProgress`
 - `quadrantShareSubmission`
 - `refreshNotifications`
+- `refreshSyncedModpacks`
 - `recheckAccountToken`
 - `updateDownloadProgress`
 - `disableRightClick`
@@ -73,3 +74,12 @@ This document freezes the backend-facing surface while the Rust backend is extra
 - active mods symlink or directory: `<mcFolder>/mods`
 - modpack manifest: `<mcFolder>/modpacks/<name>/modConfig.json`
 - sync metadata: `<mcFolder>/modpacks/<name>/quadrantSync.json`
+
+## Sync Metadata Shape
+- `quadrantSync.json` must continue to accept legacy `{ "last_synced": <seconds> }`
+- current writers may also persist `{ "last_synced": <seconds>, "modpack_id": "<id>|null" }`
+
+## Notifications Transport Notes
+- live modpack sync is carried by `/api/v3/account/notifications/get` and `/api/v3/account/notifications/ws`
+- Quadrant opts into those events with `modpack_sync=true`
+- `/account/info/get` remains a profile endpoint and is not the live modpack sync transport
