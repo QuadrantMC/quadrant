@@ -5,7 +5,6 @@ import {
   ContentContext,
   type IContentContext,
   ModLoader,
-  ModSource,
   ModType,
   type Page,
   type SnackbarHistoryItem,
@@ -45,43 +44,13 @@ import {
   UI_SCALE_KEY,
   UI_SCALE_STEP,
 } from "./uiScale";
+import { resolveDeepLink } from "./deepLinks";
+import { appendSnackbarHistory } from "./snackbar";
 
 interface PageWithScroll {
   scrollPositionX: number;
   scrollPositionY: number;
   page: Page;
-}
-
-function getQuadrantPathParts(url: URL): string[] {
-  return url.pathname.split("/").filter((part) => part.trim().length > 0);
-}
-
-function getQuadrantAction(url: URL): string {
-  const pathAction = getQuadrantPathParts(url)[0];
-  return (url.host || pathAction || "").toLowerCase();
-}
-
-function getQuadrantPathValue(url: URL): string | undefined {
-  const pathParts = getQuadrantPathParts(url);
-  return url.host ? pathParts[0] : pathParts[1];
-}
-
-function getQuadrantModId(url: URL): string {
-  return (
-    url.searchParams.get("modId") ??
-    url.searchParams.get("addonId") ??
-    getQuadrantPathValue(url) ??
-    ""
-  ).trim();
-}
-
-function getQuadrantCode(url: URL): string {
-  return (
-    url.searchParams.get("code") ??
-    url.searchParams.get("sharedCode") ??
-    getQuadrantPathValue(url) ??
-    ""
-  ).trim();
 }
 
 function App() {
@@ -344,306 +313,90 @@ function App() {
           return;
         }
         console.log("deep link:", urls);
+        const showUnsupported = () => {
+          contextFunctions.setSnackbar({
+            message: t("unsupportedDownload"),
+            className: "bg-red-700",
+            timeout: 5000,
+          });
+        };
         for (const gottenUrl of urls) {
           try {
-            const url = new URL(gottenUrl);
-            const actionType = url?.protocol;
-            console.log("url:", url);
+            const action = resolveDeepLink(gottenUrl);
+            console.log("deep link action:", gottenUrl, action);
             await currentWindow.setEnabled(true);
             await currentWindow.setFocus();
-          console.log("url protocol:", actionType);
-          if (actionType === "curseforge:") {
-            const action = (
-              url.host || getQuadrantPathParts(url)[0] || ""
-            ).toLowerCase();
-            console.log("CurseForge action:", action);
-            if (action !== "install") {
-                console.log("CurseForge action is not install");
-                contextFunctions.setSnackbar({
-                  message: t("unsupportedDownload"),
-                  className: "bg-red-700",
-                  timeout: 5000,
-                });
-                return;
-              }
-              console.log("Getting mod");
-              const modId = url!.searchParams.get("addonId") ?? "";
-              const fileId = url!.searchParams.get("fileId") ?? undefined;
-              const mod = await getMod(
-                {
-                  deletable: false,
-                  id: modId,
-                  downloadable: true,
-                  showPreviousVersion: false,
-                  versionTarget: "",
-                  modpack: "",
-                  modLoader: ModLoader.Unknown,
-                  selectable: false,
-                  selectUrl: null,
-                },
-                ModSource.CurseForge,
-              );
-              if (mod.modType === ModType.Unknown) {
-                contextFunctions.setSnackbar({
-                  message: t("unsupportedDownload"),
-                  className: "bg-red-700",
-                  timeout: 5000,
-                });
-                return;
-              }
-              const randomString = Math.random().toString(36).substring(2, 10);
 
+            if (action.kind === "none") {
+              continue;
+            }
+
+            if (action.kind === "unsupported") {
+              showUnsupported();
+              return;
+            }
+
+            if (action.kind === "oauthLogin") {
+              const oAuthState = await config.get<string>("oauthState");
+              if (action.providedState !== oAuthState) {
+                return;
+              }
+              if (action.code === null) {
+                return;
+              }
+              await invoke("oauth2_login", {
+                code: action.code,
+                redirectUri: action.redirectUri,
+              });
+              return;
+            }
+
+            if (action.kind === "importModpack") {
+              const randomString = Math.random().toString(36).substring(2, 10);
               contextFunctions.changeContent({
-                content: <ModInstallPage mod={mod} fileId={fileId} />,
+                content: <ShareSyncPage sharedCode={action.code} />,
                 name: randomString,
-                icon: <></>,
-                title: mod.name,
+                icon: <md.MdSync className="duration-0 w-6 h-6" />,
+                title: t("importMods"),
                 style: "",
                 main: false,
               });
-            } else if (actionType === "modrinth:") {
-              console.log(url!.pathname.split("/"));
-
-              const action = url?.pathname.split("/")[2] ?? url?.host ?? "";
-
-              console.log("Modrinth action:", action);
-              if (
-                action.includes("mod") ||
-                action.includes("resourcepack") ||
-                action.includes("shader")
-              ) {
-                console.log("Getting mod");
-                // This gets the slug, not the ID, but it doesn't matter for Modrinth
-                let modId = "";
-                url?.pathname.split("/").forEach((val) => {
-                  if (val !== "") {
-                    modId = val;
-                  }
-                });
-                console.log("Modrinth mod ID: ", modId);
-                const mod = await getMod(
-                  {
-                    deletable: false,
-                    id: modId,
-                    downloadable: true,
-                    showPreviousVersion: false,
-                    versionTarget: "",
-                    modpack: "",
-                    modLoader: ModLoader.Unknown,
-                    selectable: false,
-                    selectUrl: null,
-                  },
-                  ModSource.Modrinth,
-                );
-                if (mod.modType === ModType.Unknown) {
-                  contextFunctions.setSnackbar({
-                    message: t("unsupportedDownload"),
-                    className: "bg-red-700",
-                    timeout: 5000,
-                  });
-                  return;
-                }
-                // Random string
-                const randomString = Math.random()
-                  .toString(36)
-                  .substring(2, 10);
-
-                contextFunctions.changeContent({
-                  content: <ModInstallPage mod={mod} />,
-                  name: randomString,
-                  icon: <></>,
-                  title: mod.name,
-                  style: "",
-                  main: false,
-                });
-                return;
-              }
-              console.log("Modrinth action is not supported");
-              contextFunctions.setSnackbar({
-                message: t("unsupportedDownload"),
-                className: "bg-red-700",
-                timeout: 5000,
-              });
               return;
-            } else if (actionType === "quadrantnext:") {
-              const actions = url!.pathname.split("/");
-              const quadrantAction = getQuadrantAction(url);
-              console.log("Action: " + quadrantAction);
-              if (actions.includes("login") || quadrantAction === "login") {
-                const oAuthState = await config.get<string>("oauthState");
+            }
 
-                const providedState = url!.searchParams.get("state");
-                console.log("State: " + oAuthState);
-                console.log("Provided state: " + providedState);
-                if (providedState !== oAuthState) {
-                  return;
-                }
-                const code = url!.searchParams.get("code");
-                console.log("Code: " + code);
-                if (code === null) {
-                  return;
-                }
-                const redirectUri = gottenUrl.split("#")[0].split("?")[0];
-                await invoke("oauth2_login", {
-                  code: code,
-                  redirectUri: redirectUri,
-                });
-                return;
-              }
-
-              if (quadrantAction === "modrinth") {
-                const modId = getQuadrantModId(url);
-                const fileId = url!.searchParams.get("fileId") ?? undefined;
-                if (!modId) {
-                  contextFunctions.setSnackbar({
-                    message: t("unsupportedDownload"),
-                    className: "bg-red-700",
-                    timeout: 5000,
-                  });
-                  return;
-                }
-                const mod = await getMod(
-                  {
-                    deletable: false,
-                    id: modId,
-                    downloadable: true,
-                    showPreviousVersion: false,
-                    versionTarget: "",
-                    modpack: "",
-                    modLoader: ModLoader.Unknown,
-                    selectable: false,
-                    selectUrl: null,
-                  },
-                  ModSource.Modrinth,
-                );
-                if (mod.modType === ModType.Unknown) {
-                  contextFunctions.setSnackbar({
-                    message: t("unsupportedDownload"),
-                    className: "bg-red-700",
-                    timeout: 5000,
-                  });
-                  return;
-                }
-                const randomString = Math.random()
-                  .toString(36)
-                  .substring(2, 10);
-
-                contextFunctions.changeContent({
-                  content: <ModInstallPage mod={mod} fileId={fileId} />,
-                  name: randomString,
-                  icon: <></>,
-                  title: mod.name,
-                  style: "",
-                  main: false,
-                });
-                return;
-              }
-
-              if (quadrantAction === "curseforge") {
-                const modId = getQuadrantModId(url);
-                const fileId = url!.searchParams.get("fileId") ?? undefined;
-                if (!modId) {
-                  contextFunctions.setSnackbar({
-                    message: t("unsupportedDownload"),
-                    className: "bg-red-700",
-                    timeout: 5000,
-                  });
-                  return;
-                }
-                const mod = await getMod(
-                  {
-                    deletable: false,
-                    id: modId,
-                    downloadable: true,
-                    showPreviousVersion: false,
-                    versionTarget: "",
-                    modpack: "",
-                    modLoader: ModLoader.Unknown,
-                    selectable: false,
-                    selectUrl: null,
-                  },
-                  ModSource.CurseForge,
-                );
-                if (mod.modType === ModType.Unknown) {
-                  contextFunctions.setSnackbar({
-                    message: t("unsupportedDownload"),
-                    className: "bg-red-700",
-                    timeout: 5000,
-                  });
-                  return;
-                }
-                const randomString = Math.random()
-                  .toString(36)
-                  .substring(2, 10);
-
-                contextFunctions.changeContent({
-                  content: <ModInstallPage mod={mod} fileId={fileId} />,
-                  name: randomString,
-                  icon: <></>,
-                  title: mod.name,
-                  style: "",
-                  main: false,
-                });
-                return;
-              }
-
-              if (quadrantAction === "modpack") {
-                const code = getQuadrantCode(url);
-                if (!code) {
-                  contextFunctions.setSnackbar({
-                    message: t("unsupportedDownload"),
-                    className: "bg-red-700",
-                    timeout: 5000,
-                  });
-                  return;
-                }
-                const randomString = Math.random()
-                  .toString(36)
-                  .substring(2, 10);
-
-                contextFunctions.changeContent({
-                  content: <ShareSyncPage sharedCode={code} />,
-                  name: randomString,
-                  icon: <md.MdSync className="duration-0 w-6 h-6" />,
-                  title: t("importMods"),
-                  style: "",
-                  main: false,
-                });
-                return;
-              }
-            } else if (actionType === "https:") {
-              const host = url!.host.toLowerCase();
-              if (
-                host === "usequadrant.dev" ||
-                host === "www.usequadrant.dev"
-              ) {
-                const pathParts = getQuadrantPathParts(url!);
-                if (pathParts[0] === "modpack") {
-                  const code = pathParts[1] ?? "";
-                  if (code && /^\d{7}$/.test(code)) {
-                    const randomString = Math.random()
-                      .toString(36)
-                      .substring(2, 10);
-                    contextFunctions.changeContent({
-                      content: <ShareSyncPage sharedCode={code} />,
-                      name: randomString,
-                      icon: <md.MdSync className="duration-0 w-6 h-6" />,
-                      title: t("importMods"),
-                      style: "",
-                      main: false,
-                    });
-                    return;
-                  }
-                }
-              }
+            const mod = await getMod(
+              {
+                deletable: false,
+                id: action.modId,
+                downloadable: true,
+                showPreviousVersion: false,
+                versionTarget: "",
+                modpack: "",
+                modLoader: ModLoader.Unknown,
+                selectable: false,
+                selectUrl: null,
+              },
+              action.source,
+            );
+            if (mod.modType === ModType.Unknown) {
+              showUnsupported();
+              return;
+            }
+            const randomString = Math.random().toString(36).substring(2, 10);
+            contextFunctions.changeContent({
+              content: <ModInstallPage mod={mod} fileId={action.fileId} />,
+              name: randomString,
+              icon: <></>,
+              title: mod.name,
+              style: "",
+              main: false,
+            });
+            if (action.stopAfter) {
+              return;
             }
           } catch (error) {
             console.error("Failed to handle deep link", error);
-            contextFunctions.setSnackbar({
-              message: t("unsupportedDownload"),
-              className: "bg-red-700",
-              timeout: 5000,
-            });
+            showUnsupported();
           }
         }
       });
@@ -817,54 +570,10 @@ function App() {
       setSnackbarState(newSnackBarState);
       setSnackbarEnabled(true);
 
-      // Convert message to string for comparison (handles React nodes)
-      const messageKey =
-        typeof newSnackBarState.message === "string"
-          ? newSnackBarState.message
-          : JSON.stringify(newSnackBarState.message);
-
-      setSnackbarHistory((prevHistory) => {
-        // Check if there's an existing notification with the same message
-        const existingIndex = prevHistory.findIndex((item) => {
-          const existingKey =
-            typeof item.message === "string"
-              ? item.message
-              : JSON.stringify(item.message);
-          return (
-            existingKey === messageKey &&
-            item.className === newSnackBarState.className
-          );
-        });
-
-        let newHistory: SnackbarHistoryItem[];
-
-        if (existingIndex !== -1) {
-          // Increment count of existing notification and move it to the end
-          const existingItem = prevHistory[existingIndex];
-          newHistory = [
-            ...prevHistory.slice(0, existingIndex),
-            ...prevHistory.slice(existingIndex + 1),
-            { ...existingItem, count: existingItem.count + 1 },
-          ];
-        } else {
-          // Add new notification with count of 1
-          newHistory = [
-            ...prevHistory,
-            {
-              ...newSnackBarState,
-              count: 1,
-              id: Math.random().toString(36).substring(2, 10),
-            },
-          ];
-        }
-
-        // Limit to 5 most recent grouped notifications
-        if (newHistory.length > 5) {
-          newHistory = newHistory.slice(-5);
-        }
-
-        return newHistory;
-      });
+      const id = Math.random().toString(36).substring(2, 10);
+      setSnackbarHistory((prevHistory) =>
+        appendSnackbarHistory(prevHistory, newSnackBarState, id),
+      );
     },
     setSnackbarNoState(newSnackBarState) {
       setSnackbarState(newSnackBarState);

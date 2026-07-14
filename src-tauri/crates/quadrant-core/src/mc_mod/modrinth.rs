@@ -232,10 +232,7 @@ pub async fn get_mod_modrinth(args: GetModArgs) -> Result<Mod> {
             .and_then(|version| version.as_str())
             .unwrap_or_default()
             .to_string(),
-        date_modified: res_json["updated"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
+        date_modified: res_json["updated"].as_str().unwrap_or_default().to_string(),
         mod_type,
         source: ModSource::Modrinth,
         slug: res_json["slug"].as_str().unwrap_or_default().to_string(),
@@ -507,6 +504,20 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    fn modrinth_search_args(query: &str) -> SearchModsArgs {
+        SearchModsArgs {
+            query: query.to_string(),
+            mod_type: "mod".to_string(),
+            filter_on: false,
+            game_version: String::new(),
+            mod_loader: String::new(),
+            categories: Vec::new(),
+            open_source: false,
+            sort_by: "relevance".to_string(),
+            offset: 0,
+        }
+    }
+
     fn modrinth_get_mod_args(id: &str) -> GetModArgs {
         GetModArgs {
             id: id.to_string(),
@@ -629,6 +640,264 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);
         version_lookup.assert_calls(1);
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn search_mods_modrinth_serializes_query_and_facets() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_MODRINTH_API_BASE", server.base_url());
+        }
+
+        let search = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v2/search")
+                .query_param("query", "sodium")
+                .query_param("limit", "100")
+                .query_param("offset", "20")
+                .query_param("index", "downloads")
+                .query_param(
+                    "facets",
+                    concat!(
+                        "[[\"project_type:mod\"],[\"versions:1.20.1\"],",
+                        "[\"categories:fabric\"],",
+                        "[\"categories:optimization\",\"categories:utility\"],",
+                        "[\"open_source:true\"]]"
+                    ),
+                );
+            then.status(200).json_body(json!({
+                "hits": [{
+                    "title": "Sodium",
+                    "project_id": "AANobbMI",
+                    "downloads": 1000,
+                    "date_modified": "2024-01-01T00:00:00Z",
+                    "slug": "sodium",
+                    "description": "fast",
+                    "license": "LGPL-3.0",
+                    "icon_url": "https://example.invalid/icon.png",
+                    "gallery": ["https://example.invalid/screenshot.png"]
+                }]
+            }));
+        });
+
+        let mut args = modrinth_search_args("sodium");
+        args.game_version = "1.20.1".to_string();
+        args.mod_loader = "Fabric".to_string();
+        args.categories = vec!["optimization".to_string(), "utility".to_string()];
+        args.open_source = true;
+        args.sort_by = "downloads".to_string();
+        args.offset = 20;
+
+        let mods = search_mods_modrinth(args).await.unwrap();
+        search.assert();
+
+        assert_eq!(mods.len(), 1);
+        assert_eq!(mods[0].name, "Sodium");
+        assert_eq!(mods[0].id, "AANobbMI");
+        assert_eq!(mods[0].slug, "sodium");
+        assert_eq!(mods[0].source, ModSource::Modrinth);
+        assert_eq!(mods[0].download_count, 1000);
+        assert_eq!(
+            mods[0].thumbnail_urls,
+            vec!["https://example.invalid/screenshot.png".to_string()]
+        );
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn search_mods_modrinth_errors_on_http_error_status() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_MODRINTH_API_BASE", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(GET).path("/v2/search");
+            then.status(500).body("search backend exploded");
+        });
+
+        let error = search_mods_modrinth(modrinth_search_args("broken"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("500"));
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn search_mods_modrinth_errors_on_malformed_json() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_MODRINTH_API_BASE", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(GET).path("/v2/search");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body("{not-json");
+        });
+
+        search_mods_modrinth(modrinth_search_args("malformed"))
+            .await
+            .unwrap_err();
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn get_latest_mod_version_modrinth_prefers_newest_primary_file() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_MODRINTH_API_BASE", server.base_url());
+        }
+
+        let versions = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v2/project/demo-mod/version")
+                .query_param("game_versions", "[\"1.20.1\"]")
+                .query_param("loaders", "[\"fabric\"]");
+            then.status(200).json_body(json!([
+                {
+                    "date_published": "2024-01-01T00:00:00Z",
+                    "files": [{
+                        "hashes": { "sha512": "unused", "sha1": "old" },
+                        "url": "https://example.invalid/old.jar",
+                        "filename": "old.jar",
+                        "primary": true,
+                        "size": 1
+                    }]
+                },
+                {
+                    "date_published": "2024-06-01T00:00:00Z",
+                    "files": [
+                        {
+                            "hashes": { "sha512": "unused", "sha1": "extra" },
+                            "url": "https://example.invalid/extra.jar",
+                            "filename": "extra.jar",
+                            "primary": false,
+                            "size": 2
+                        },
+                        {
+                            "hashes": { "sha512": "unused", "sha1": "new" },
+                            "url": "https://example.invalid/new.jar",
+                            "filename": "new.jar",
+                            "primary": true,
+                            "size": 3
+                        }
+                    ]
+                }
+            ]));
+        });
+
+        let file = get_latest_mod_version_modrinth(
+            "demo-mod".to_string(),
+            "1.20.1".to_string(),
+            ModLoader::Fabric,
+            ModType::Mod,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        versions.assert();
+        assert_eq!(file.filename, "new.jar");
+        assert_eq!(file.hashes.sha1, "new");
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn get_latest_mod_version_modrinth_errors_when_no_versions() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_MODRINTH_API_BASE", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(GET).path("/v2/project/empty-mod/version");
+            then.status(200).json_body(json!([]));
+        });
+
+        let error = get_latest_mod_version_modrinth(
+            "empty-mod".to_string(),
+            "1.20.1".to_string(),
+            ModLoader::Fabric,
+            ModType::Mod,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("noVersion"));
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn get_categories_modrinth_maps_and_filters_tags() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_MODRINTH_API_BASE", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(GET).path("/v2/tag/category");
+            then.status(200).json_body(json!([
+                { "name": "game-mechanics", "project_type": "mod", "header": "categories" },
+                { "name": "optimization", "project_type": "mod" },
+                { "name": "32x", "project_type": "resourcepack", "header": "resolutions" },
+                { "name": "", "project_type": "mod", "header": "categories" }
+            ]));
+        });
+
+        let categories = get_categories_modrinth(ModType::Mod).await.unwrap();
+
+        assert_eq!(categories.len(), 2);
+        assert_eq!(categories[0].id, "game-mechanics");
+        assert_eq!(categories[0].name, "Game Mechanics");
+        assert_eq!(categories[0].header, "categories");
+        assert_eq!(categories[0].source, ModSource::Modrinth);
+        assert_eq!(categories[1].id, "optimization");
+        assert_eq!(categories[1].name, "Optimization");
+        assert_eq!(categories[1].header, "categories");
 
         unsafe {
             std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");

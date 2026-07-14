@@ -182,13 +182,16 @@ pub async fn answer_invite(
 
 #[cfg(test)]
 mod tests {
-    use super::sync_modpack;
+    use super::{get_synced_modpacks, sync_modpack};
     use crate::{
         Result,
         models::{InstalledMod, LocalModpack, ModLoader, ModSource},
         ports::SecretStore,
     };
-    use httpmock::{Method::POST, MockServer};
+    use httpmock::{
+        Method::{GET, POST},
+        MockServer,
+    };
 
     struct MemorySecretStore;
 
@@ -251,5 +254,57 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_modpack_surfaces_auth_failure_body() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/quadrant/sync/submit")
+                .header("authorization", "Bearer token-123");
+            then.status(401)
+                .header("content-type", "text/plain")
+                .body("invalid token");
+        });
+
+        let error = sync_modpack(
+            &MemorySecretStore,
+            "test-agent",
+            local_modpack(),
+            false,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "invalid token");
+    }
+
+    #[tokio::test]
+    async fn get_synced_modpacks_errors_on_malformed_payload() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/quadrant/sync/get")
+                .query_param("show_owners", "true")
+                .header("authorization", "Bearer token-123");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"unexpected":"shape"}"#);
+        });
+
+        get_synced_modpacks(&MemorySecretStore, "test-agent", true, None)
+            .await
+            .unwrap_err();
     }
 }

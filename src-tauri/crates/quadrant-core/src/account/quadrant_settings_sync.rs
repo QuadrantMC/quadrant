@@ -124,12 +124,115 @@ pub async fn submit_quadrant_settings(
 
 #[cfg(test)]
 mod tests {
-    use super::SYNCED_KEYS;
+    use super::{SYNCED_KEYS, get_quadrant_settings, submit_quadrant_settings};
+    use crate::{
+        Result,
+        ports::{SecretStore, SettingsStore},
+    };
+    use httpmock::{
+        Method::{GET, POST},
+        MockServer,
+    };
+    use serde_json::Value;
+
+    struct MemorySettingsStore;
+
+    impl SettingsStore for MemorySettingsStore {
+        fn get_value(&self, key: &str) -> Result<Option<Value>> {
+            Ok(match key {
+                "lastSettingsUpdated" => {
+                    Some(Value::String("2024-01-01T00:00:00+00:00".to_string()))
+                }
+                "modrinth" => Some(Value::Bool(true)),
+                _ => None,
+            })
+        }
+
+        fn set_value(&self, _key: &str, _value: Value) -> Result<()> {
+            Ok(())
+        }
+
+        fn entries(&self) -> Result<Vec<(String, Value)>> {
+            Ok(vec![
+                ("modrinth".to_string(), Value::Bool(true)),
+                (
+                    "hardwareId".to_string(),
+                    Value::String("hw-123".to_string()),
+                ),
+            ])
+        }
+    }
+
+    struct MemorySecretStore;
+
+    impl SecretStore for MemorySecretStore {
+        fn get_secret(&self, key: &str) -> Result<Option<String>> {
+            match key {
+                "accountToken" => Ok(Some("token-123".to_string())),
+                _ => Ok(None),
+            }
+        }
+
+        fn set_secret(&self, _key: &str, _value: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn delete_secret(&self, _key: &str) -> Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn machine_identity_and_usage_counters_are_not_cloud_synced() {
         assert!(!SYNCED_KEYS.contains(&"hardwareId"));
         assert!(!SYNCED_KEYS.contains(&"curseforgeUsage"));
         assert!(!SYNCED_KEYS.contains(&"modrinthUsage"));
+    }
+
+    #[tokio::test]
+    async fn submit_quadrant_settings_surfaces_auth_failure_body() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/quadrant/settings_sync/submit")
+                .header("authorization", "Bearer token-123");
+            then.status(401)
+                .header("content-type", "text/plain")
+                .body("invalid token");
+        });
+
+        let error =
+            submit_quadrant_settings(&MemorySettingsStore, &MemorySecretStore, "test-agent")
+                .await
+                .unwrap_err();
+        assert_eq!(error.to_string(), "invalid token");
+    }
+
+    #[tokio::test]
+    async fn get_quadrant_settings_errors_on_payload_without_sync_date() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/quadrant/settings_sync/get")
+                .header("authorization", "Bearer token-123");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"settings":"{}"}"#);
+        });
+
+        let error = get_quadrant_settings(&MemorySettingsStore, &MemorySecretStore, "test-agent")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("sync_date missing"));
     }
 }

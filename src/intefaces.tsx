@@ -1,4 +1,5 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
+/** @format */
+
 import { createContext } from "react";
 
 export interface IContentContext {

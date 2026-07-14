@@ -847,3 +847,134 @@ pub async fn identify_modpack(
     log::info!("Identified {} mod(s)", mods.len());
     Ok(mods)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mod_type_from_string_covers_aliases_and_fallback() {
+        let cases = [
+            ("mod", ModType::Mod),
+            ("Mod", ModType::Mod),
+            ("shader", ModType::ShaderPack),
+            ("shaderpack", ModType::ShaderPack),
+            ("ShaderPack", ModType::ShaderPack),
+            ("resourcepack", ModType::ResourcePack),
+            ("modpack", ModType::Modpack),
+            ("datapack", ModType::DataPack),
+            ("", ModType::Unknown),
+            ("plugin", ModType::Unknown),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(ModType::from(input.to_string()), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn mod_type_curseforge_class_ids_round_trip() {
+        let cases = [
+            (ModType::Mod, 6),
+            (ModType::ResourcePack, 12),
+            (ModType::ShaderPack, 6552),
+            (ModType::Modpack, 4471),
+            (ModType::DataPack, 6945),
+        ];
+        for (mod_type, class_id) in cases {
+            assert_eq!(mod_type.curseforge_id(), class_id as i32);
+            assert_eq!(ModType::from_curseforge_class(class_id), mod_type);
+        }
+        assert_eq!(ModType::Unknown.curseforge_id(), 999);
+        assert_eq!(ModType::from_curseforge_class(0), ModType::Unknown);
+        assert_eq!(ModType::from_curseforge_class(999), ModType::Unknown);
+    }
+
+    #[test]
+    fn mod_type_display_labels() {
+        assert_eq!(ModType::Mod.to_string(), "mod");
+        assert_eq!(ModType::ResourcePack.to_string(), "resourcepack");
+        assert_eq!(ModType::ShaderPack.to_string(), "shader");
+        assert_eq!(ModType::Modpack.to_string(), "modpack");
+        assert_eq!(ModType::DataPack.to_string(), "datapack");
+        assert_eq!(ModType::Unknown.to_string(), "unknown");
+    }
+
+    #[test]
+    fn get_mod_url_builds_curseforge_urls() {
+        let cases = [
+            (ModType::Mod, "https://curseforge.com/minecraft/mc-mods/jei"),
+            (
+                ModType::ResourcePack,
+                "https://curseforge.com/minecraft/texture-packs/jei",
+            ),
+            (
+                ModType::ShaderPack,
+                "https://curseforge.com/minecraft/customization/jei",
+            ),
+            (
+                ModType::Modpack,
+                "https://curseforge.com/minecraft/modpacks/jei",
+            ),
+            (
+                ModType::DataPack,
+                "https://curseforge.com/minecraft/data-packs/jei",
+            ),
+            (ModType::Unknown, "https://curseforge.com/minecraft//jei"),
+        ];
+        for (mod_type, expected) in cases {
+            assert_eq!(
+                get_mod_url("jei".to_string(), mod_type, ModSource::CurseForge),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn get_mod_url_builds_modrinth_urls() {
+        let cases = [
+            (ModType::Mod, "https://modrinth.com/mod/sodium"),
+            (
+                ModType::ResourcePack,
+                "https://modrinth.com/resourcepack/sodium",
+            ),
+            (ModType::ShaderPack, "https://modrinth.com/shader/sodium"),
+            (ModType::Modpack, "https://modrinth.com/modpack/sodium"),
+            (ModType::DataPack, "https://modrinth.com/datapack/sodium"),
+            (ModType::Unknown, "https://modrinth.com/unknown/sodium"),
+        ];
+        for (mod_type, expected) in cases {
+            assert_eq!(
+                get_mod_url("sodium".to_string(), mod_type, ModSource::Modrinth),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn get_mod_url_online_has_no_base() {
+        assert_eq!(
+            get_mod_url("thing".to_string(), ModType::Mod, ModSource::Online),
+            "//thing"
+        );
+    }
+
+    #[test]
+    fn get_user_url_builds_provider_profile_urls() {
+        assert_eq!(
+            get_user_url("dev".to_string(), ModSource::CurseForge),
+            "https://curseforge.com/members/dev"
+        );
+        assert_eq!(
+            get_user_url("dev".to_string(), ModSource::Modrinth),
+            "https://modrinth.com/user/dev"
+        );
+        assert_eq!(get_user_url("dev".to_string(), ModSource::Online), "/dev");
+    }
+
+    #[test]
+    fn get_user_agent_embeds_crate_version() {
+        let agent = get_user_agent();
+        assert!(agent.starts_with("mrquantumoff/quadrant/v"));
+        assert!(agent.contains(env!("CARGO_PKG_VERSION")));
+    }
+}

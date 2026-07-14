@@ -278,4 +278,60 @@ mod tests {
         assert!(message.contains("Quadrant Share retrieval failed: invalid modpack payload"));
         assert!(message.contains("not-json"));
     }
+
+    #[tokio::test]
+    async fn share_modpack_raw_surfaces_invalid_json_success_body() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(POST).path("/quadrant/share/submit");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body("{definitely-not-json");
+        });
+
+        let error = share_modpack_raw(
+            &MemorySettingsStore,
+            &EmptySecretStore,
+            "test-agent",
+            installed_modpack(),
+            "test-api-key",
+        )
+        .await
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("Quadrant Share submission failed: invalid JSON response"));
+        assert!(message.contains("{definitely-not-json"));
+    }
+
+    #[tokio::test]
+    async fn get_quadrant_share_modpack_surfaces_auth_failure() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/quadrant/share/get")
+                .query_param("code", "abc123");
+            then.status(401)
+                .header("content-type", "text/plain")
+                .body("invalid api key");
+        });
+
+        let error = get_quadrant_share_modpack("test-agent", "test-api-key", "abc123".to_string())
+            .await
+            .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("Quadrant Share retrieval failed with 401 Unauthorized"));
+        assert!(message.contains("invalid api key"));
+    }
 }
