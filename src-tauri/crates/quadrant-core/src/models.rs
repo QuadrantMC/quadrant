@@ -352,3 +352,333 @@ pub struct Article {
 pub fn modpack_path(mc_folder: &Path, modpack_name: &str) -> PathBuf {
     mc_folder.join("modpacks").join(modpack_name)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const ALL_LOADERS: [ModLoader; 14] = [
+        ModLoader::Forge,
+        ModLoader::Fabric,
+        ModLoader::NeoForge,
+        ModLoader::Babric,
+        ModLoader::BtaBabric,
+        ModLoader::JavaAgent,
+        ModLoader::LegacyFabric,
+        ModLoader::LiteLoader,
+        ModLoader::RisugamisModLoader,
+        ModLoader::NilLoader,
+        ModLoader::Ornithe,
+        ModLoader::Quilt,
+        ModLoader::Rift,
+        ModLoader::Unknown,
+    ];
+
+    #[test]
+    fn mod_loader_from_string_covers_all_variants_and_aliases() {
+        let cases = [
+            ("forge", ModLoader::Forge),
+            ("Forge", ModLoader::Forge),
+            ("  fabric  ", ModLoader::Fabric),
+            ("neoforge", ModLoader::NeoForge),
+            ("babric", ModLoader::Babric),
+            ("BTA (Babric)", ModLoader::BtaBabric),
+            ("bta-babric", ModLoader::BtaBabric),
+            ("bta babric", ModLoader::BtaBabric),
+            ("Java Agent", ModLoader::JavaAgent),
+            ("java-agent", ModLoader::JavaAgent),
+            ("Legacy Fabric", ModLoader::LegacyFabric),
+            ("legacy-fabric", ModLoader::LegacyFabric),
+            ("LiteLoader", ModLoader::LiteLoader),
+            ("lite loader", ModLoader::LiteLoader),
+            ("lite-loader", ModLoader::LiteLoader),
+            ("Risugami's ModLoader", ModLoader::RisugamisModLoader),
+            ("risugamis modloader", ModLoader::RisugamisModLoader),
+            ("risugami modloader", ModLoader::RisugamisModLoader),
+            ("modloader", ModLoader::RisugamisModLoader),
+            ("NilLoader", ModLoader::NilLoader),
+            ("nil loader", ModLoader::NilLoader),
+            ("nil-loader", ModLoader::NilLoader),
+            ("ornithe", ModLoader::Ornithe),
+            ("quilt", ModLoader::Quilt),
+            ("rift", ModLoader::Rift),
+            ("Unknown", ModLoader::Unknown),
+            ("", ModLoader::Unknown),
+            ("paper", ModLoader::Unknown),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(ModLoader::from(input.to_string()), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn mod_loader_display_round_trips_through_from() {
+        for loader in ALL_LOADERS {
+            assert_eq!(ModLoader::from(loader.to_string()), loader);
+        }
+    }
+
+    #[test]
+    fn mod_loader_modrinth_slugs() {
+        let cases = [
+            (ModLoader::Forge, Some("forge")),
+            (ModLoader::Fabric, Some("fabric")),
+            (ModLoader::NeoForge, Some("neoforge")),
+            (ModLoader::Babric, Some("babric")),
+            (ModLoader::BtaBabric, Some("bta-babric")),
+            (ModLoader::JavaAgent, Some("java-agent")),
+            (ModLoader::LegacyFabric, Some("legacy-fabric")),
+            (ModLoader::LiteLoader, Some("liteloader")),
+            (ModLoader::RisugamisModLoader, Some("modloader")),
+            (ModLoader::NilLoader, Some("nilloader")),
+            (ModLoader::Ornithe, Some("ornithe")),
+            (ModLoader::Quilt, Some("quilt")),
+            (ModLoader::Rift, Some("rift")),
+            (ModLoader::Unknown, None),
+        ];
+        for (loader, expected) in cases {
+            assert_eq!(loader.modrinth_slug(), expected, "{loader}");
+        }
+    }
+
+    #[test]
+    fn mod_loader_curseforge_ids() {
+        assert_eq!(ModLoader::Forge.curseforge_id(), Some(1));
+        assert_eq!(ModLoader::LiteLoader.curseforge_id(), Some(3));
+        assert_eq!(ModLoader::Fabric.curseforge_id(), Some(4));
+        assert_eq!(ModLoader::Quilt.curseforge_id(), Some(5));
+        assert_eq!(ModLoader::NeoForge.curseforge_id(), Some(6));
+        for loader in [
+            ModLoader::Babric,
+            ModLoader::BtaBabric,
+            ModLoader::JavaAgent,
+            ModLoader::LegacyFabric,
+            ModLoader::RisugamisModLoader,
+            ModLoader::NilLoader,
+            ModLoader::Ornithe,
+            ModLoader::Rift,
+            ModLoader::Unknown,
+        ] {
+            assert_eq!(loader.curseforge_id(), None, "{loader}");
+        }
+        assert_eq!(ModLoader::Forge.to_curseforge_id(), 1);
+        assert_eq!(ModLoader::Unknown.to_curseforge_id(), 0);
+    }
+
+    #[test]
+    fn mod_loader_serde_uses_display_labels() {
+        for loader in ALL_LOADERS {
+            let serialized = serde_json::to_value(loader).unwrap();
+            assert_eq!(serialized, json!(loader.to_string()));
+            let round_tripped: ModLoader = serde_json::from_value(serialized).unwrap();
+            assert_eq!(round_tripped, loader);
+        }
+    }
+
+    #[test]
+    fn mod_source_serde_uses_dart_style_names() {
+        assert_eq!(
+            serde_json::to_value(ModSource::CurseForge).unwrap(),
+            json!("ModSource.curseForge")
+        );
+        assert_eq!(
+            serde_json::to_value(ModSource::Modrinth).unwrap(),
+            json!("ModSource.modRinth")
+        );
+        assert_eq!(
+            serde_json::to_value(ModSource::Online).unwrap(),
+            json!("ModSource.online")
+        );
+        assert_eq!(
+            serde_json::from_value::<ModSource>(json!("ModSource.curseForge")).unwrap(),
+            ModSource::CurseForge
+        );
+        assert!(serde_json::from_value::<ModSource>(json!("curseForge")).is_err());
+    }
+
+    #[test]
+    fn installed_mod_serializes_camel_case_fields() {
+        let mod_ = InstalledMod {
+            name: "Sodium".to_string(),
+            id: "AANobbMI".to_string(),
+            download_count: 7,
+            version: "0.5.8".to_string(),
+            mod_type: "Mod".to_string(),
+            source: ModSource::Modrinth,
+            slug: "sodium".to_string(),
+            thumbnail_urls: vec!["https://example.invalid/thumb.png".to_string()],
+            description: "desc".to_string(),
+            license: "LGPL-3.0".to_string(),
+            mod_icon_url: "https://example.invalid/icon.png".to_string(),
+            download_url: "https://cdn.modrinth.com/sodium.jar".to_string(),
+        };
+        let value = serde_json::to_value(&mod_).unwrap();
+        assert_eq!(value["downloadCount"], json!(7));
+        assert_eq!(value["modType"], json!("Mod"));
+        assert_eq!(
+            value["thumbnailUrls"],
+            json!(["https://example.invalid/thumb.png"])
+        );
+        assert_eq!(
+            value["modIconUrl"],
+            json!("https://example.invalid/icon.png")
+        );
+        assert_eq!(
+            value["downloadUrl"],
+            json!("https://cdn.modrinth.com/sodium.jar")
+        );
+        assert_eq!(value["source"], json!("ModSource.modRinth"));
+
+        let round_tripped: InstalledMod = serde_json::from_value(value).unwrap();
+        assert_eq!(round_tripped.download_count, 7);
+        assert_eq!(round_tripped.mod_icon_url, mod_.mod_icon_url);
+    }
+
+    #[test]
+    fn installed_mod_deserializes_with_minimal_fields() {
+        let mod_: InstalledMod = serde_json::from_value(json!({
+            "id": "abc",
+            "source": "ModSource.curseForge",
+            "downloadUrl": "https://forgecdn.net/mod.jar"
+        }))
+        .unwrap();
+        assert_eq!(mod_.id, "abc");
+        assert_eq!(mod_.source, ModSource::CurseForge);
+        assert_eq!(mod_.name, "");
+        assert_eq!(mod_.download_count, 0);
+        assert!(mod_.thumbnail_urls.is_empty());
+    }
+
+    #[test]
+    fn installed_modpack_serde_pins_field_names_and_defaults() {
+        let modpack = InstalledModpack {
+            mod_config_version: "2".to_string(),
+            quadrant_version: "26.7.6".to_string(),
+            name: "alpha".to_string(),
+            version: "1.20.1".to_string(),
+            mod_loader: ModLoader::BtaBabric,
+            mods: Vec::new(),
+        };
+        let value = serde_json::to_value(&modpack).unwrap();
+        assert_eq!(value["modConfigVersion"], json!("2"));
+        assert_eq!(value["quadrantVersion"], json!("26.7.6"));
+        assert_eq!(value["modLoader"], json!("BTA (Babric)"));
+
+        let legacy: InstalledModpack = serde_json::from_value(json!({
+            "name": "legacy",
+            "version": "1.12.2",
+            "modLoader": "Forge",
+            "mods": []
+        }))
+        .unwrap();
+        assert_eq!(legacy.mod_config_version, "1");
+        assert_eq!(legacy.quadrant_version, "");
+    }
+
+    #[test]
+    fn local_modpack_serde_pins_field_names() {
+        let modpack: LocalModpack = serde_json::from_value(json!({
+            "name": "alpha",
+            "version": "1.20.1",
+            "modLoader": "Fabric",
+            "mods": [],
+            "unknownMods": true,
+            "isApplied": false,
+            "lastSynced": 42000,
+            "modpackId": "pack-1"
+        }))
+        .unwrap();
+        assert!(modpack.unknown_mods);
+        assert!(!modpack.is_applied);
+        assert_eq!(modpack.last_synced, 42_000);
+        assert_eq!(modpack.modpack_id.as_deref(), Some("pack-1"));
+
+        let value = serde_json::to_value(&modpack).unwrap();
+        assert_eq!(value["unknownMods"], json!(true));
+        assert_eq!(value["isApplied"], json!(false));
+        assert_eq!(value["lastSynced"], json!(42_000));
+        assert_eq!(value["modpackId"], json!("pack-1"));
+    }
+
+    #[test]
+    fn local_modpack_last_synced_accepts_integral_numbers_only() {
+        let base = |last_synced: Value| {
+            json!({
+                "name": "alpha",
+                "version": "1.20.1",
+                "modLoader": "Fabric",
+                "mods": [],
+                "unknownMods": false,
+                "isApplied": false,
+                "lastSynced": last_synced,
+                "modpackId": null
+            })
+        };
+
+        let from_int: LocalModpack = serde_json::from_value(base(json!(1234))).unwrap();
+        assert_eq!(from_int.last_synced, 1234);
+        let from_float: LocalModpack = serde_json::from_value(base(json!(1234.0))).unwrap();
+        assert_eq!(from_float.last_synced, 1234);
+        let from_negative: LocalModpack = serde_json::from_value(base(json!(-5.0))).unwrap();
+        assert_eq!(from_negative.last_synced, -5);
+        let from_u64: LocalModpack =
+            serde_json::from_value(base(json!(u64::from(u32::MAX)))).unwrap();
+        assert_eq!(from_u64.last_synced, i64::from(u32::MAX));
+
+        assert!(serde_json::from_value::<LocalModpack>(base(json!(12.5))).is_err());
+        assert!(serde_json::from_value::<LocalModpack>(base(json!(u64::MAX))).is_err());
+        assert!(serde_json::from_value::<LocalModpack>(base(json!("42"))).is_err());
+        assert!(serde_json::from_value::<LocalModpack>(base(json!(null))).is_err());
+    }
+
+    #[test]
+    fn installed_modpack_from_local_modpack_stamps_versions() {
+        let local = LocalModpack {
+            name: "alpha".to_string(),
+            version: "1.20.1".to_string(),
+            mod_loader: ModLoader::Quilt,
+            mods: vec![InstalledMod::minimal(
+                "mod-1".to_string(),
+                ModSource::Online,
+                "https://example.invalid/mod.jar".to_string(),
+            )],
+            unknown_mods: true,
+            is_applied: true,
+            last_synced: 99,
+            modpack_id: Some("pack-1".to_string()),
+        };
+        let installed = InstalledModpack::from(local);
+        assert_eq!(installed.mod_config_version, "2");
+        assert_eq!(installed.quadrant_version, quadrant_version());
+        assert_eq!(installed.name, "alpha");
+        assert_eq!(installed.version, "1.20.1");
+        assert_eq!(installed.mod_loader, ModLoader::Quilt);
+        assert_eq!(installed.mods.len(), 1);
+    }
+
+    #[test]
+    fn local_modpack_from_installed_tuple_defaults_extras() {
+        let installed = InstalledModpack {
+            mod_config_version: "2".to_string(),
+            quadrant_version: "x".to_string(),
+            name: "alpha".to_string(),
+            version: "1.20.1".to_string(),
+            mod_loader: ModLoader::Forge,
+            mods: Vec::new(),
+        };
+        let local = LocalModpack::from((installed, true, 7));
+        assert!(local.is_applied);
+        assert_eq!(local.last_synced, 7);
+        assert_eq!(local.modpack_id, None);
+        assert!(!local.unknown_mods);
+    }
+
+    #[test]
+    fn modpack_path_appends_modpacks_folder() {
+        assert_eq!(
+            modpack_path(Path::new("/mc"), "alpha"),
+            PathBuf::from("/mc/modpacks/alpha")
+        );
+    }
+}

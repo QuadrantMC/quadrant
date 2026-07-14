@@ -2262,12 +2262,16 @@ struct CodeArgs {
 #[cfg(test)]
 mod tests {
     use super::{
-        HostEventEnvelope, JsonFileStore, Notification, NotificationCursor,
+        HostEventBridge, HostEventEnvelope, JsonFileStore, Notification, NotificationCursor,
         NotificationRuntimeState, QuadrantHost, QuadrantHostOptions,
         merge_notifications_and_collect_updates,
     };
-    use quadrant_core::{account::KEYRING_SERVICE, ports::SettingsStore};
-    use serde_json::Value;
+    use quadrant_core::{
+        account::KEYRING_SERVICE,
+        events::{BackendEvent, ModProgressPayload},
+        ports::{EventSink, SettingsStore},
+    };
+    use serde_json::{Value, json};
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -2393,5 +2397,76 @@ mod tests {
         let envelope: HostEventEnvelope = receiver.recv().await.unwrap();
         assert_eq!(envelope.event, "refreshSyncedModpacks");
         assert_eq!(envelope.payload, Value::String("modpack-1".to_string()));
+    }
+
+    #[test]
+    fn json_store_entries_and_deletes_round_trip_across_instances() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("config.json");
+
+        let store = JsonFileStore::new(path.clone()).unwrap();
+        store.set_string("mcFolder", "/tmp/mc").unwrap();
+        store.set_i64("lastPage", 3).unwrap();
+        store.set_bool("modrinth", true).unwrap();
+
+        let reloaded = JsonFileStore::new(path.clone()).unwrap();
+        let entries = reloaded.entries().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            reloaded.get_string("mcFolder").unwrap().as_deref(),
+            Some("/tmp/mc")
+        );
+        assert_eq!(reloaded.get_i64("lastPage").unwrap(), Some(3));
+        assert_eq!(reloaded.get_bool("modrinth").unwrap(), Some(true));
+
+        reloaded.delete_key("lastPage").unwrap();
+
+        let after_delete = JsonFileStore::new(path).unwrap();
+        assert_eq!(after_delete.get_i64("lastPage").unwrap(), None);
+        assert_eq!(after_delete.entries().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn event_bridge_broadcasts_published_backend_events() {
+        let bridge = HostEventBridge::new();
+        let mut receiver = bridge.subscribe();
+
+        bridge
+            .publish(BackendEvent::ModDownloadProgress(ModProgressPayload {
+                mod_id: "mod-1".to_string(),
+                progress: 50,
+            }))
+            .unwrap();
+        bridge.publish(BackendEvent::RecheckAccountToken).unwrap();
+
+        let envelope = receiver.recv().await.unwrap();
+        assert_eq!(envelope.event, "modDownloadProgress");
+        assert_eq!(
+            envelope.payload,
+            json!({ "modId": "mod-1", "progress": 50 })
+        );
+
+        let envelope = receiver.recv().await.unwrap();
+        assert_eq!(envelope.event, "recheckAccountToken");
+        assert_eq!(envelope.payload, Value::Null);
+    }
+
+    #[test]
+    fn host_new_materializes_defaults_and_mc_folder() {
+        let temp_dir = tempdir().unwrap();
+        let mc_folder = temp_dir.path().join("mc");
+        let mut options =
+            QuadrantHostOptions::new(temp_dir.path().to_path_buf(), "client", "secret", "api-key");
+        options.mc_folder = Some(mc_folder.clone());
+        let host = QuadrantHost::new(options).unwrap();
+
+        assert_eq!(
+            host.get_config_value("curseforge").unwrap(),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            host.get_config_value("mcFolder").unwrap(),
+            Some(Value::String(mc_folder.to_string_lossy().to_string()))
+        );
     }
 }

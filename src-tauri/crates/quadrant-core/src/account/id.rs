@@ -335,28 +335,6 @@ pub async fn oauth2_login(
     Ok(())
 }
 
-/// Fetches a single page of notification history from the Quadrant backend.
-pub async fn get_notification_history_page(
-    secret_store: &impl SecretStore,
-    user_agent: &str,
-    cursor: Option<&NotificationCursor>,
-    read: Option<bool>,
-    limit: Option<usize>,
-    include_modpack_sync: bool,
-) -> Result<NotificationHistoryResponse> {
-    get_notification_history_page_with_refresh(
-        secret_store,
-        user_agent,
-        cursor,
-        read,
-        limit,
-        include_modpack_sync,
-        env!("QUADRANT_OAUTH2_CLIENT_ID"),
-        env!("QUADRANT_OAUTH2_CLIENT_SECRET"),
-    )
-    .await
-}
-
 /// Fetches a single page of notification history and refreshes the token on demand.
 pub async fn get_notification_history_page_with_refresh(
     secret_store: &impl SecretStore,
@@ -394,26 +372,6 @@ pub async fn get_notification_history_page_with_refresh(
     }
 
     parse_notification_history_response(response).await
-}
-
-/// Fetches all notification history pages from the provided cursor onward.
-pub async fn get_notification_history_all_since(
-    secret_store: &impl SecretStore,
-    user_agent: &str,
-    cursor: Option<&NotificationCursor>,
-    read: Option<bool>,
-    include_modpack_sync: bool,
-) -> Result<(Vec<Notification>, NotificationCursor)> {
-    get_notification_history_all_since_with_refresh(
-        secret_store,
-        user_agent,
-        cursor,
-        read,
-        include_modpack_sync,
-        env!("QUADRANT_OAUTH2_CLIENT_ID"),
-        env!("QUADRANT_OAUTH2_CLIENT_SECRET"),
-    )
-    .await
 }
 
 /// Fetches all notification history pages from the provided cursor onward.
@@ -551,8 +509,9 @@ pub async fn read_notification(
 #[cfg(test)]
 mod tests {
     use super::{
-        Notification, NotificationCursor, NotificationWsFrame, get_notification_history_all_since,
-        get_notification_history_page,
+        Notification, NotificationCursor, NotificationWsFrame,
+        get_notification_history_all_since_with_refresh,
+        get_notification_history_page_with_refresh,
     };
     use crate::{Result, ports::SecretStore};
     use httpmock::{Method::GET, MockServer};
@@ -613,7 +572,7 @@ mod tests {
             }));
         });
 
-        let response = get_notification_history_page(
+        let response = get_notification_history_page_with_refresh(
             &MemorySecretStore,
             "test-agent",
             Some(&NotificationCursor {
@@ -623,6 +582,8 @@ mod tests {
             None,
             Some(999),
             true,
+            "test-client-id",
+            "test-client-secret",
         )
         .await
         .unwrap();
@@ -667,7 +628,7 @@ mod tests {
             }));
         });
 
-        let (notifications, cursor) = get_notification_history_all_since(
+        let (notifications, cursor) = get_notification_history_all_since_with_refresh(
             &MemorySecretStore,
             "test-agent",
             Some(&NotificationCursor {
@@ -676,6 +637,8 @@ mod tests {
             }),
             None,
             true,
+            "test-client-id",
+            "test-client-secret",
         )
         .await
         .unwrap();

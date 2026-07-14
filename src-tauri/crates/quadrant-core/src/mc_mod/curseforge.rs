@@ -624,6 +624,20 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    fn curseforge_search_args(query: &str) -> SearchModsArgs {
+        SearchModsArgs {
+            query: query.to_string(),
+            mod_type: "mod".to_string(),
+            filter_on: false,
+            game_version: String::new(),
+            mod_loader: String::new(),
+            categories: Vec::new(),
+            open_source: false,
+            sort_by: "relevance".to_string(),
+            offset: 0,
+        }
+    }
+
     fn curseforge_get_mod_args(id: &str) -> GetModArgs {
         GetModArgs {
             id: id.to_string(),
@@ -767,6 +781,254 @@ mod tests {
             std::env::remove_var("QUADRANT_TEST_CURSEFORGE_API_BASE");
         }
         clear_curseforge_fingerprint_cache().await;
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn search_mods_curseforge_serializes_query_and_pagination_params() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_CURSEFORGE_API_BASE", server.base_url());
+        }
+
+        let search = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/mods/search")
+                .header("x-api-key", env!("ETERNAL_API_TOKEN"))
+                .query_param("gameId", "432")
+                .query_param("searchFilter", "jei")
+                .query_param("sortField", "3")
+                .query_param("sortOrder", "desc")
+                .query_param("classId", "6")
+                .query_param("index", "50")
+                .query_param("pageSize", "50")
+                .query_param("gameVersion", "1.20.1")
+                .query_param("modLoaderType", "1")
+                .query_param("categoryIds", "[423,5191]");
+            then.status(200).json_body(json!({
+                "data": [{
+                    "id": 238222,
+                    "name": "Just Enough Items",
+                    "summary": "item viewer",
+                    "downloadCount": 999,
+                    "dateModified": "2024-01-01T00:00:00Z",
+                    "classId": 6,
+                    "slug": "jei",
+                    "screenshots": [{
+                        "thumbnailUrl": "https://example.invalid/screenshot.png"
+                    }],
+                    "logo": {
+                        "url": "https://example.invalid/logo.png"
+                    }
+                }]
+            }));
+        });
+
+        let mut args = curseforge_search_args("jei");
+        args.game_version = "1.20.1".to_string();
+        args.mod_loader = "Forge".to_string();
+        args.categories = vec!["423".to_string(), "5191".to_string()];
+        args.sort_by = "updated".to_string();
+        args.offset = 50;
+
+        let mods = search_mods_curseforge(args).await.unwrap();
+        search.assert();
+
+        assert_eq!(mods.len(), 1);
+        assert_eq!(mods[0].id, "238222");
+        assert_eq!(mods[0].name, "Just Enough Items");
+        assert_eq!(mods[0].slug, "jei");
+        assert_eq!(mods[0].source, ModSource::CurseForge);
+        assert_eq!(mods[0].mod_type, ModType::Mod);
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_CURSEFORGE_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn search_mods_curseforge_errors_on_http_error_status() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_CURSEFORGE_API_BASE", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(GET).path("/v1/mods/search");
+            then.status(500)
+                .header("content-type", "text/plain")
+                .body("search backend exploded");
+        });
+
+        search_mods_curseforge(curseforge_search_args("broken"))
+            .await
+            .unwrap_err();
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_CURSEFORGE_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn get_latest_mod_version_curseforge_sorts_files_by_date() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_CURSEFORGE_API_BASE", server.base_url());
+        }
+
+        let files = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/mods/77/files")
+                .header("x-api-key", env!("ETERNAL_API_TOKEN"))
+                .query_param("gameVersion", "1.20.1")
+                .query_param("modLoaderType", "1");
+            then.status(200).json_body(json!({
+                "data": [
+                    {
+                        "id": 1,
+                        "gameId": 432,
+                        "modId": 77,
+                        "isAvailable": true,
+                        "fileName": "old.jar",
+                        "hashes": [{ "value": "old", "algo": 1 }],
+                        "fileDate": "2024-01-01T00:00:00+00:00",
+                        "fileLength": 1,
+                        "downloadUrl": "https://example.invalid/old.jar"
+                    },
+                    {
+                        "id": 2,
+                        "gameId": 432,
+                        "modId": 77,
+                        "isAvailable": true,
+                        "fileName": "new.jar",
+                        "hashes": [{ "value": "new", "algo": 1 }],
+                        "fileDate": "2024-06-01T00:00:00+00:00",
+                        "fileLength": 2,
+                        "downloadUrl": "https://example.invalid/new.jar"
+                    }
+                ]
+            }));
+        });
+
+        let file = get_latest_mod_version_curseforge(
+            "77".to_string(),
+            "1.20.1".to_string(),
+            ModLoader::Forge,
+            ModType::Mod,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        files.assert();
+        assert_eq!(file.id, 2);
+        assert_eq!(file.file_name, "new.jar");
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_CURSEFORGE_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn get_latest_mod_version_curseforge_uses_explicit_file_id() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_CURSEFORGE_API_BASE", server.base_url());
+        }
+
+        let file_lookup = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/mods/77/files/999")
+                .header("x-api-key", env!("ETERNAL_API_TOKEN"));
+            then.status(200).json_body(json!({
+                "data": {
+                    "id": 999,
+                    "gameId": 432,
+                    "modId": 77,
+                    "isAvailable": true,
+                    "fileName": "pinned.jar",
+                    "hashes": [{ "value": "pinned", "algo": 1 }],
+                    "fileDate": "2024-03-01T00:00:00+00:00",
+                    "fileLength": 3,
+                    "downloadUrl": "https://example.invalid/pinned.jar"
+                }
+            }));
+        });
+
+        let file = get_latest_mod_version_curseforge(
+            "77".to_string(),
+            "1.20.1".to_string(),
+            ModLoader::Forge,
+            ModType::Mod,
+            Some("999".to_string()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        file_lookup.assert();
+        assert_eq!(file.id, 999);
+        assert_eq!(file.file_name, "pinned.jar");
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_CURSEFORGE_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn get_categories_curseforge_skips_class_rows_and_invalid_entries() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_CURSEFORGE_API_BASE", server.base_url());
+        }
+
+        let _mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/categories")
+                .header("x-api-key", env!("ETERNAL_API_TOKEN"))
+                .query_param("gameId", "432")
+                .query_param("classId", "6");
+            then.status(200).json_body(json!({
+                "data": [
+                    { "id": 6, "name": "Mods", "isClass": true },
+                    { "id": 423, "name": "Map and Information" },
+                    { "id": 0, "name": "Broken" },
+                    { "id": 5, "name": "" }
+                ]
+            }));
+        });
+
+        let categories = get_categories_curseforge(ModType::Mod).await.unwrap();
+
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0].id, "423");
+        assert_eq!(categories[0].name, "Map and Information");
+        assert_eq!(categories[0].header, "categories");
+        assert_eq!(categories[0].source, ModSource::CurseForge);
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_CURSEFORGE_API_BASE");
+        }
         clear_provider_http_cache().await;
     }
 }

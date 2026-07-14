@@ -1038,4 +1038,185 @@ mod tests {
             modpack_path(&mc_folder, "beta")
         );
     }
+
+    #[test]
+    fn validate_modpack_name_accepts_single_normal_components() {
+        for name in ["alpha", "My Pack 2", "пак", "パック", "pack.v2"] {
+            assert!(validate_modpack_name(name).is_ok(), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn validate_modpack_name_rejects_traversal_and_multi_component_paths() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "/etc",
+            "../escape",
+            "a/..",
+            "a/./b",
+            "modpacks/../../x",
+        ] {
+            assert!(validate_modpack_name(name).is_err(), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn safe_download_file_name_extracts_and_decodes_names() {
+        assert_eq!(
+            safe_download_file_name(
+                "https://cdn.modrinth.com/data/AANobbMI/versions/mod.jar",
+                &ModSource::Modrinth,
+            )
+            .unwrap(),
+            "mod.jar"
+        );
+        assert_eq!(
+            safe_download_file_name(
+                "https://cdn.modrinth.com/data/my%20mod%20v1.2.jar",
+                &ModSource::Modrinth,
+            )
+            .unwrap(),
+            "my mod v1.2.jar"
+        );
+        assert_eq!(
+            safe_download_file_name(
+                "https://mediafilez.forgecdn.net/files/1/2/jei.jar",
+                &ModSource::CurseForge,
+            )
+            .unwrap(),
+            "jei.jar"
+        );
+        assert_eq!(
+            safe_download_file_name("https://example.com/files/пак.jar", &ModSource::Online)
+                .unwrap(),
+            "пак.jar"
+        );
+        assert_eq!(
+            safe_download_file_name("https://cdn.modrinth.com/mod.jar/", &ModSource::Modrinth)
+                .unwrap(),
+            "mod.jar"
+        );
+    }
+
+    #[test]
+    fn safe_download_file_name_restricts_schemes() {
+        assert!(
+            safe_download_file_name("http://127.0.0.1:8080/mod.jar", &ModSource::Modrinth).is_ok()
+        );
+        assert!(
+            safe_download_file_name("http://localhost:8080/mod.jar", &ModSource::Modrinth).is_err()
+        );
+        assert!(safe_download_file_name("http://example.com/mod.jar", &ModSource::Online).is_err());
+        assert!(
+            safe_download_file_name("ftp://cdn.modrinth.com/mod.jar", &ModSource::Modrinth)
+                .is_err()
+        );
+        assert!(safe_download_file_name("file:///etc/passwd", &ModSource::Online).is_err());
+    }
+
+    #[test]
+    fn safe_download_file_name_rejects_traversal_and_empty_names() {
+        for url in [
+            "https://cdn.modrinth.com/..%2Fescape.jar",
+            "https://cdn.modrinth.com/%2E%2E",
+            "https://cdn.modrinth.com/a%2Fb.jar",
+            "https://cdn.modrinth.com/%2Fetc%2Fpasswd",
+            "https://cdn.modrinth.com",
+            "https://cdn.modrinth.com/",
+            "not a url",
+        ] {
+            assert!(
+                safe_download_file_name(url, &ModSource::Modrinth).is_err(),
+                "{url}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn modpack_operations_reject_missing_targets_and_duplicates() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        let existing = get_modpacks(&mc_folder, false).await.unwrap();
+
+        assert!(delete_modpack(&mc_folder, &existing, "ghost").is_err());
+        assert!(apply_modpack(&mc_folder, "ghost").is_err());
+        assert!(update_modpack(&mc_folder, &existing, "ghost", None, None, None).is_err());
+        assert!(delete_mod(&mc_folder, &existing, "ghost", "mod-1").is_err());
+
+        create_modpack(&mc_folder, &existing, "alpha", "1.20.1", ModLoader::Fabric).unwrap();
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        assert!(create_modpack(&mc_folder, &listed, "alpha", "1.20.1", ModLoader::Fabric).is_err());
+
+        let mod_ = online_mod("mod-1", "https://example.invalid/mod.jar".to_string());
+        register_mod(&mc_folder, &listed, mod_.clone(), "alpha")
+            .await
+            .unwrap();
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        assert!(
+            register_mod(&mc_folder, &listed, mod_, "alpha")
+                .await
+                .is_err()
+        );
+        assert!(delete_mod(&mc_folder, &listed, "alpha", "other-mod").is_err());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn apply_modpack_backs_up_real_mods_directory() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        std::fs::create_dir_all(modpack_path(&mc_folder, "alpha")).unwrap();
+        std::fs::create_dir_all(mc_folder.join("mods")).unwrap();
+        std::fs::write(mc_folder.join("mods").join("loose.jar"), "jar").unwrap();
+
+        apply_modpack(&mc_folder, "alpha").unwrap();
+
+        assert!(mc_folder.join("mods").is_symlink());
+        let backup = std::fs::read_dir(mc_folder.join("modpacks"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("mods-backup-")
+            })
+            .expect("backup folder should exist");
+        assert!(backup.path().join("loose.jar").exists());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn apply_modpack_switches_between_applied_modpacks() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        std::fs::create_dir_all(modpack_path(&mc_folder, "alpha")).unwrap();
+        std::fs::create_dir_all(modpack_path(&mc_folder, "beta")).unwrap();
+
+        apply_modpack(&mc_folder, "alpha").unwrap();
+        apply_modpack(&mc_folder, "beta").unwrap();
+
+        let mods_path = mc_folder.join("mods");
+        assert_eq!(
+            mods_path.read_link().unwrap(),
+            modpack_path(&mc_folder, "beta")
+        );
+        // Switching must not delete the previously applied modpack's contents.
+        assert!(modpack_path(&mc_folder, "alpha").exists());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn delete_applied_modpack_removes_mods_link() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        let existing = get_modpacks(&mc_folder, false).await.unwrap();
+        create_modpack(&mc_folder, &existing, "alpha", "1.20.1", ModLoader::Fabric).unwrap();
+        apply_modpack(&mc_folder, "alpha").unwrap();
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        assert!(listed[0].is_applied);
+
+        delete_modpack(&mc_folder, &listed, "alpha").unwrap();
+        assert!(!mc_folder.join("mods").is_symlink());
+        assert!(!modpack_path(&mc_folder, "alpha").exists());
+    }
 }

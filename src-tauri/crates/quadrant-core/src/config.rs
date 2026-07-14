@@ -275,6 +275,48 @@ mod tests {
     }
 
     #[test]
+    fn ensure_default_app_config_is_idempotent() {
+        let store = MemoryStore::new();
+        ensure_default_app_config(&store).unwrap();
+        let mut first = store.entries().unwrap();
+        first.sort_by(|a, b| a.0.cmp(&b.0));
+        assert!(!first.is_empty());
+
+        ensure_default_app_config(&store).unwrap();
+        let mut second = store.entries().unwrap();
+        second.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn ensure_default_app_config_preserves_existing_values() {
+        let store = MemoryStore::new();
+        store.set_bool("clipIcons", false).unwrap();
+        store.set_i64("uiScale", 150).unwrap();
+        store
+            .set_string("hardwareId", "fixed-id".to_string())
+            .unwrap();
+        store
+            .set_string("mcFolder", "/custom/minecraft".to_string())
+            .unwrap();
+
+        ensure_default_app_config(&store).unwrap();
+
+        assert_eq!(store.get_bool("clipIcons").unwrap(), Some(false));
+        assert_eq!(store.get_i64("uiScale").unwrap(), Some(150));
+        assert_eq!(
+            store.get_string("hardwareId").unwrap().as_deref(),
+            Some("fixed-id")
+        );
+        assert_eq!(
+            store.get_string("mcFolder").unwrap().as_deref(),
+            Some("/custom/minecraft")
+        );
+        assert_eq!(store.get_bool("modrinth").unwrap(), Some(true));
+        assert_eq!(store.get_i64("lastPage").unwrap(), Some(0));
+    }
+
+    #[test]
     fn mc_folder_resolves_to_minecraft_path() {
         let mc_folder = get_mc_folder().unwrap().unwrap();
         #[cfg(target_os = "macos")]

@@ -21,3 +21,11 @@ export function getRuntimeAdapter(): Promise<RuntimeAdapter> {
   }
   return runtimePromise;
 }
+
+/**
+ * Test-only escape hatch: inject a fake adapter, or pass `undefined` to
+ * clear the memoized runtime so the next call re-resolves it.
+ */
+export function __setRuntimeForTests(adapter: RuntimeAdapter | undefined) {
+  runtimePromise = adapter ? Promise.resolve(adapter) : undefined;
+}

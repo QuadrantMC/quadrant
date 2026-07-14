@@ -76,8 +76,16 @@ Three crates, layered:
 - Vite dev server is **fixed at port 1420** with `strictPort: true`. Vite ignores `src-tauri/**` for file watching.
 - On Linux, Tauri builds also need `libsecret-1-dev` (keyring).
 
-## No tests
-There are **no test suites** anywhere — no Jest, Vitest, `cargo test`, or CI test job. The only "verification" is building successfully. CI (`validate-desktop.yml`) just runs builds. When you change something, verify by building the affected side (`bun run build` for renderer, a Tauri/cargo build for Rust).
+## Tests
+See **[TESTING.md](TESTING.md)** for the full strategy. Quick reference:
+
+- **Rust**: `#[cfg(test)]` modules live next to the code in `quadrant-core`/`quadrant-host`. Run from `src-tauri/` with placeholder creds:
+  `QUADRANT_OAUTH2_CLIENT_ID=dev QUADRANT_OAUTH2_CLIENT_SECRET=dev ETERNAL_API_TOKEN=dev QUADRANT_API_KEY=dev cargo test --workspace`
+  (`quadrant-core` alone compiles credential-free.) DI is via `&impl SettingsStore/SecretStore/EventSink` port params, so tests pass hand-rolled fakes; I/O uses `tempfile`; HTTP uses `httpmock` against the `#[cfg(test)]` `QUADRANT_TEST_*_API_BASE` / runtime `QUADRANT_API_BASE_URL` seams (serialize on the module's test mutex + clear the shared cache).
+- **Frontend**: Vitest + React Testing Library + jsdom. `bun run test` (watch: `bun run test:watch`). Colocated `*.test.ts(x)`. Mock the Tauri boundary at the facade — `vi.mock("./desktop")` / `vi.mock("../../../tools")`; never mock `@tauri-apps/*`. `src/desktop/runtime.ts` exports `__setRuntimeForTests` to reset the memoized adapter.
+- **CI** (`validate-desktop.yml`): `test-rust` (cargo test + fmt --check + advisory clippy) and `test-frontend` (bun run test) run on every PR alongside the build jobs.
+
+When you change something, run the tests for the affected side and add coverage for new logic — don't consider a change verified by a successful build alone.
 
 ## Styling
 - **Tailwind CSS v4** (via PostCSS, not the Tailwind CLI). Config in `postcss.config.cjs`. Per-component `.css` files sit next to some pages/components.

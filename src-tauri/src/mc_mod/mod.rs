@@ -2,8 +2,8 @@ use quadrant_host::QuadrantHost;
 use tauri::{AppHandle, Manager};
 
 pub use quadrant_core::mc_mod::{
-    GetModArgs, GlobalSearchModsArgs, IdentifiedMod, MinecraftVersion, Mod, ModType, SearchCategory,
-    SearchModsArgs, UniversalModFile, get_mod_url, get_user_agent,
+    GetModArgs, GlobalSearchModsArgs, IdentifiedMod, MinecraftVersion, Mod, ModType,
+    SearchCategory, SearchModsArgs, UniversalModFile, get_mod_url, get_user_agent,
 };
 pub use quadrant_core::models::{InstalledMod, ModSource};
 
