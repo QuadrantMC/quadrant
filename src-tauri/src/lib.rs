@@ -287,6 +287,12 @@ pub async fn run() {
             let tray = app.tray_by_id("main");
             if tray.is_some() {
                 let tray = tray.unwrap();
+                // On macOS the tray title renders as text beside the menu bar
+                // icon; keep only the icon there. Other platforms use it as a
+                // tooltip/label, so keep the app name.
+                #[cfg(target_os = "macos")]
+                tray.set_title(None::<&str>)?;
+                #[cfg(not(target_os = "macos"))]
                 tray.set_title(Some("Quadrant"))?;
                 let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
                 let show_w = MenuItem::with_id(app, "show", "Show/Hide", true, None::<&str>)?;
