@@ -12,11 +12,11 @@ use keyring_core::{Entry, Error as KeyringError, set_default_store};
 use quadrant_core::{
     Error, Result,
     account::{
-        KEYRING_SERVICE, clear_account_token,
+        KEYRING_SERVICE, account_token_needs_refresh, clear_account_token,
         id::{
             AccountInfo, Notification, NotificationCursor, NotificationWsFrame,
             get_account_info_with_refresh, get_notification_history_all_since_with_refresh,
-            oauth2_login, read_notification,
+            oauth2_login, read_notification, try_refresh_token,
         },
         quadrant_settings_sync,
         quadrant_share::{
@@ -68,6 +68,10 @@ pub use quadrant_core::mc_mod::{get_mod_url, get_user_url};
 const NOTIFICATION_CURSOR_CREATED_AT_KEY: &str = "notificationCursorCreatedAt";
 const NOTIFICATION_CURSOR_NOTIFICATION_ID_KEY: &str = "notificationCursorNotificationId";
 const SETTINGS_SYNC_INTERVAL_SECS: u64 = 120;
+/// How often the background worker checks whether the access token is due for a
+/// proactive refresh. Refresh timing is governed by the stored deadline, not
+/// this interval, so a short poll just bounds how late a refresh can fire.
+const TOKEN_REFRESH_CHECK_INTERVAL_SECS: u64 = 60;
 const WS_REPLAY_LIMIT: usize = 500;
 const REFRESH_SYNCED_MODPACKS_EVENT: &str = "refreshSyncedModpacks";
 static LOGGER_INIT: Once = Once::new();
@@ -138,6 +142,7 @@ struct QuadrantHostInner {
 struct WorkerHandles {
     notification: Option<JoinHandle<()>>,
     settings_sync: Option<JoinHandle<()>>,
+    token_refresh: Option<JoinHandle<()>>,
 }
 
 #[derive(Default)]
@@ -440,6 +445,13 @@ impl QuadrantHost {
             }));
         }
 
+        if worker_handles.token_refresh.is_none() {
+            let host = self.clone();
+            worker_handles.token_refresh = Some(tokio::spawn(async move {
+                host.token_refresh_loop().await;
+            }));
+        }
+
         Ok(())
     }
 
@@ -452,6 +464,11 @@ impl QuadrantHost {
         }
 
         if let Some(handle) = worker_handles.settings_sync.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+
+        if let Some(handle) = worker_handles.token_refresh.take() {
             handle.abort();
             let _ = handle.await;
         }
@@ -801,6 +818,8 @@ impl QuadrantHost {
         get_synced_modpacks(
             &self.inner.secret_store,
             &self.inner.options.user_agent,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
             show_owners,
             modpack_id,
         )
@@ -811,6 +830,8 @@ impl QuadrantHost {
         kick_member(
             &self.inner.secret_store,
             &self.inner.options.user_agent,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
             modpack_id,
             username,
         )
@@ -826,6 +847,8 @@ impl QuadrantHost {
         invite_member(
             &self.inner.secret_store,
             &self.inner.options.user_agent,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
             modpack_id,
             username,
             admin,
@@ -837,6 +860,8 @@ impl QuadrantHost {
         delete_synced_modpack(
             &self.inner.secret_store,
             &self.inner.options.user_agent,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
             modpack_id,
         )
         .await
@@ -851,6 +876,8 @@ impl QuadrantHost {
         let timestamp = quadrant_core::account::quadrant_sync::sync_modpack(
             &self.inner.secret_store,
             &self.inner.options.user_agent,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
             modpack.clone(),
             overwrite,
             Some(connection_id.as_str()),
@@ -877,6 +904,8 @@ impl QuadrantHost {
         answer_invite(
             &self.inner.secret_store,
             &self.inner.options.user_agent,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
             modpack_id,
             answer,
         )
@@ -909,6 +938,8 @@ impl QuadrantHost {
             &self.inner.config_store,
             &self.inner.secret_store,
             &self.inner.options.user_agent,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
             mod_config,
             &self.inner.options.quadrant_api_key,
         )
@@ -936,6 +967,8 @@ impl QuadrantHost {
             &self.inner.config_store,
             &self.inner.secret_store,
             &self.inner.options.user_agent,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
         )
         .await
     }
@@ -945,6 +978,8 @@ impl QuadrantHost {
             &self.inner.config_store,
             &self.inner.secret_store,
             &self.inner.options.user_agent,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
         )
         .await
     }
@@ -1387,6 +1422,44 @@ impl QuadrantHost {
                 log::warn!("Settings sync worker failed: {error}");
             }
         }
+    }
+
+    /// Keeps the access token fresh in the background so token-dependent actions
+    /// never fire with an expired token. The first tick fires immediately, so a
+    /// token that expired while the app was closed is refreshed on startup.
+    async fn token_refresh_loop(&self) {
+        let mut interval =
+            tokio::time::interval(Duration::from_secs(TOKEN_REFRESH_CHECK_INTERVAL_SECS));
+        loop {
+            interval.tick().await;
+            if let Err(error) = self.refresh_account_token_if_due().await {
+                log::warn!("Proactive token refresh worker failed: {error}");
+            }
+        }
+    }
+
+    /// Refreshes the access token when its recorded deadline has passed. A no-op
+    /// when the user is signed out or the token is not yet due.
+    async fn refresh_account_token_if_due(&self) -> Result<()> {
+        if account_token_needs_refresh(&self.inner.secret_store)? {
+            self.refresh_account_token().await?;
+        }
+        Ok(())
+    }
+
+    /// Forces an access token refresh using the stored refresh token and signals
+    /// the frontend to re-read account state.
+    pub async fn refresh_account_token(&self) -> Result<()> {
+        try_refresh_token(
+            &self.inner.secret_store,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
+            &self.inner.options.user_agent,
+        )
+        .await?;
+        self.inner
+            .event_sink
+            .emit("recheckAccountToken", Value::Null)
     }
 
     async fn bootstrap_notifications(&self) -> Result<()> {

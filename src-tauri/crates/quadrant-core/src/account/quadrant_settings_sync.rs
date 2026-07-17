@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::{
     Result,
-    account::{backend_base_url, get_account_token},
+    account::{backend_base_url, send_with_token_refresh},
     ports::{SecretStore, SettingsStore},
 };
 
@@ -33,17 +33,26 @@ pub async fn get_quadrant_settings(
     settings_store: &impl SettingsStore,
     secret_store: &impl SecretStore,
     user_agent: &str,
+    client_id: &str,
+    client_secret: &str,
 ) -> Result<()> {
     log::debug!("Pulling settings from cloud");
-    let token = get_account_token(secret_store)?;
-    let json = reqwest::Client::new()
-        .get(format!("{}/quadrant/settings_sync/get", backend_base_url()))
-        .header("User-Agent", user_agent)
-        .bearer_auth(token)
-        .send()
-        .await?
-        .json::<serde_json::Value>()
-        .await?;
+    let json = send_with_token_refresh(
+        secret_store,
+        user_agent,
+        client_id,
+        client_secret,
+        |token| {
+            reqwest::Client::new()
+                .get(format!("{}/quadrant/settings_sync/get", backend_base_url()))
+                .header("User-Agent", user_agent)
+                .bearer_auth(token)
+                .send()
+        },
+    )
+    .await?
+    .json::<serde_json::Value>()
+    .await?;
 
     let last_settings_updated = DateTime::parse_from_rfc3339(
         &settings_store
@@ -87,9 +96,10 @@ pub async fn submit_quadrant_settings(
     settings_store: &impl SettingsStore,
     secret_store: &impl SecretStore,
     user_agent: &str,
+    client_id: &str,
+    client_secret: &str,
 ) -> Result<()> {
     log::info!("Pushing settings to cloud");
-    let token = get_account_token(secret_store)?;
     let entries = settings_store.entries()?;
     let new_sync_date = settings_store
         .get_string("lastSettingsUpdated")?
@@ -103,19 +113,28 @@ pub async fn submit_quadrant_settings(
         }
     }
 
-    let response = reqwest::Client::new()
-        .post(format!(
-            "{}/quadrant/settings_sync/submit",
-            backend_base_url()
-        ))
-        .header("User-Agent", user_agent)
-        .bearer_auth(token)
-        .json(&json!({
-            "settings": serde_json::to_string_pretty(&settings_map)?,
-            "sync_date": new_sync_date.to_rfc3339(),
-        }))
-        .send()
-        .await?;
+    let body = json!({
+        "settings": serde_json::to_string_pretty(&settings_map)?,
+        "sync_date": new_sync_date.to_rfc3339(),
+    });
+    let response = send_with_token_refresh(
+        secret_store,
+        user_agent,
+        client_id,
+        client_secret,
+        |token| {
+            reqwest::Client::new()
+                .post(format!(
+                    "{}/quadrant/settings_sync/submit",
+                    backend_base_url()
+                ))
+                .header("User-Agent", user_agent)
+                .bearer_auth(token)
+                .json(&body)
+                .send()
+        },
+    )
+    .await?;
     if !response.status().is_success() {
         return Err(anyhow!(response.text().await?));
     }
@@ -197,19 +216,26 @@ mod tests {
             std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
         }
 
+        // 403 (not 401) so the response body surfaces directly without the
+        // account token refresh path kicking in.
         let _mock = server.mock(|when, then| {
             when.method(POST)
                 .path("/quadrant/settings_sync/submit")
                 .header("authorization", "Bearer token-123");
-            then.status(401)
+            then.status(403)
                 .header("content-type", "text/plain")
                 .body("invalid token");
         });
 
-        let error =
-            submit_quadrant_settings(&MemorySettingsStore, &MemorySecretStore, "test-agent")
-                .await
-                .unwrap_err();
+        let error = submit_quadrant_settings(
+            &MemorySettingsStore,
+            &MemorySecretStore,
+            "test-agent",
+            "test-client-id",
+            "test-client-secret",
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error.to_string(), "invalid token");
     }
 
@@ -230,9 +256,15 @@ mod tests {
                 .body(r#"{"settings":"{}"}"#);
         });
 
-        let error = get_quadrant_settings(&MemorySettingsStore, &MemorySecretStore, "test-agent")
-            .await
-            .unwrap_err();
+        let error = get_quadrant_settings(
+            &MemorySettingsStore,
+            &MemorySecretStore,
+            "test-agent",
+            "test-client-id",
+            "test-client-secret",
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("sync_date missing"));
     }
 }

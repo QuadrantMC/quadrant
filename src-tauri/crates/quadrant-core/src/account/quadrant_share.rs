@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Result,
-    account::backend_base_url,
+    account::{backend_base_url, send_with_token_refresh},
     models::InstalledModpack,
     ports::{SecretStore, SettingsStore},
 };
@@ -85,6 +85,8 @@ pub async fn share_modpack_raw(
     settings_store: &impl SettingsStore,
     secret_store: &impl SecretStore,
     user_agent: &str,
+    client_id: &str,
+    client_secret: &str,
     mod_config: InstalledModpack,
     api_key: &str,
 ) -> Result<QuadrantShareSubmissionResponse> {
@@ -95,28 +97,47 @@ pub async fn share_modpack_raw(
         return Err(anyhow::anyhow!("enableDataSharing"));
     }
 
-    let token = secret_store.get_secret("accountToken")?;
-    let mut url = format!("{}/quadrant/share/submit", backend_base_url());
-    if token.is_some() {
-        url = format!("{}/id", url);
-    }
-
-    let mut request = reqwest::Client::new()
-        .post(&url)
-        .header("User-Agent", user_agent)
-        .json(&QuadrantShareSubmission {
-            hardware_id: settings_store.get_string("hardwareId")?.unwrap_or_default(),
-            mod_config: serde_json::to_string_pretty(&mod_config)?,
-        });
-
-    if let Some(token) = token {
-        request = request.bearer_auth(token);
+    // Signed-in shares go to the `/id` endpoint with a bearer token; anonymous
+    // shares use the API key. Only the bearer path can (and needs to) refresh.
+    let signed_in = secret_store.get_secret("accountToken")?.is_some();
+    let url = if signed_in {
+        format!("{}/quadrant/share/submit/id", backend_base_url())
     } else {
-        request = request.header("Authorization", api_key);
-    }
+        format!("{}/quadrant/share/submit", backend_base_url())
+    };
+    let submission = QuadrantShareSubmission {
+        hardware_id: settings_store.get_string("hardwareId")?.unwrap_or_default(),
+        mod_config: serde_json::to_string_pretty(&mod_config)?,
+    };
+
+    let response = if signed_in {
+        send_with_token_refresh(
+            secret_store,
+            user_agent,
+            client_id,
+            client_secret,
+            |token| {
+                reqwest::Client::new()
+                    .post(&url)
+                    .header("User-Agent", user_agent)
+                    .json(&submission)
+                    .bearer_auth(token)
+                    .send()
+            },
+        )
+        .await?
+    } else {
+        reqwest::Client::new()
+            .post(&url)
+            .header("User-Agent", user_agent)
+            .json(&submission)
+            .header("Authorization", api_key)
+            .send()
+            .await?
+    };
 
     parse_json_response(
-        request.send().await?,
+        response,
         "Quadrant Share submission failed",
         EMPTY_SHARE_SUBMISSION_BODY,
     )
@@ -239,6 +260,8 @@ mod tests {
             &MemorySettingsStore,
             &EmptySecretStore,
             "test-agent",
+            "test-client-id",
+            "test-client-secret",
             installed_modpack(),
             "test-api-key",
         )
@@ -298,6 +321,8 @@ mod tests {
             &MemorySettingsStore,
             &EmptySecretStore,
             "test-agent",
+            "test-client-id",
+            "test-client-secret",
             installed_modpack(),
             "test-api-key",
         )

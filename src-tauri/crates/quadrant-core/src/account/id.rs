@@ -7,7 +7,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     Result,
-    account::{backend_base_url, get_account_token, get_refresh_token, set_secret},
+    account::{
+        backend_base_url, get_account_token, get_refresh_token, set_secret,
+        set_token_refresh_deadline,
+    },
     ports::SecretStore,
 };
 
@@ -238,6 +241,7 @@ pub async fn try_refresh_token(
     if let Some(new_refresh_token) = res.refresh_token {
         set_secret(secret_store, "refreshToken", &new_refresh_token)?;
     }
+    set_token_refresh_deadline(secret_store, res.expires_in)?;
     log::info!("Token refresh successful");
     Ok(())
 }
@@ -331,6 +335,7 @@ pub async fn oauth2_login(
     if let Some(refresh_token) = res.refresh_token {
         set_secret(secret_store, "refreshToken", &refresh_token)?;
     }
+    set_token_refresh_deadline(secret_store, res.expires_in)?;
     log::info!("OAuth2 login successful");
     Ok(())
 }
