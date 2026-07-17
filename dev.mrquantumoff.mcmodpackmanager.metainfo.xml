@@ -50,6 +50,15 @@
   <releases>
 
 
+    <release date="2026-07-17" version="26.7.8">
+        <!-- <url type="details">https://blog.mrquantumoff.dev</url> -->
+        <description>
+        <p>Account sessions now refresh automatically in the background</p>
+        <p>Sync, share, and settings actions retry on their own instead of failing when a token expires</p>
+        <p>Bug fixes and internal improvements</p>
+        </description>
+    </release>
+
     <release date="2026-07-14" version="26.7.7">
         <!-- <url type="details">https://blog.mrquantumoff.dev</url> -->
         <description>
