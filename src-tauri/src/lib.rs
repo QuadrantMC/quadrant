@@ -428,7 +428,25 @@ pub async fn run() {
             account::quadrant_settings_sync::get_quadrant_settings,
             #[cfg(feature = "quadrant_id")]
             account::quadrant_settings_sync::submit_quadrant_settings,
-        ]);
+        ])
+        .on_window_event(|window, event| {
+            // The custom titlebar close button hides the window to the tray
+            // instead of quitting. With native decorations the OS-drawn close
+            // button issues a real close, so intercept it here and mirror that
+            // hide-to-tray behavior. Quitting stays exclusive to the tray's
+            // "Quit" item (app.exit), which does not emit this event.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == "main"
+            {
+                api.prevent_close();
+                let _ = window.hide();
+                // Match the custom button, which disables the hidden window on
+                // Windows to keep it out of taskbar reactivation. The tray
+                // re-enables it on show.
+                #[cfg(target_os = "windows")]
+                let _ = window.set_enabled(false);
+            }
+        });
 
     builder
         .run(tauri::generate_context!())
