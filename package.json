@@ -18,8 +18,8 @@
     "tauri:macos:adhoc:build": "APPLE_SIGNING_IDENTITY=- tauri build --target aarch64-apple-darwin --bundles dmg",
     "tauri:windows:build": "tauri-windows-bundle build",
     "tauri:cef": "bun node_modules/@tauri-apps/cli-cef/tauri.js",
-    "dev:cef": "bun node_modules/@tauri-apps/cli-cef/tauri.js dev --features cef -- --no-default-features",
-    "build:cef": "bun node_modules/@tauri-apps/cli-cef/tauri.js build --features cef -- --no-default-features"
+    "dev:cef": "bun node_modules/@tauri-apps/cli-cef/tauri.js dev --config src-tauri/tauri.cef.conf.json --features cef -- --no-default-features",
+    "build:cef": "bun node_modules/@tauri-apps/cli-cef/tauri.js build --config src-tauri/tauri.cef.conf.json --features cef -- --no-default-features"
   },
   "dependencies": {
     "@fabianlars/tauri-plugin-oauth": "2.1.0",

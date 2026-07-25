@@ -44,6 +44,15 @@ its own and passes trailing args to cargo. `proprietary` and `updater` still
 come from `build.features` in `tauri.conf.json`, so only `cef` is passed
 explicitly.
 
+Both also merge `src-tauri/tauri.cef.conf.json` over the base config. It sets
+`bundle.windows.webviewInstallMode` to `skip`: the base config uses
+`embedBootstrapper`, and the bundler honours that even for a CEF build — the
+first installer built here downloaded and embedded the WebView2 Evergreen
+bootstrapper, which a CEF app never loads, and would have installed the WebView2
+runtime on the user's machine for nothing. The overlay has to null out `silent`
+as well, since the `skip` variant of that schema is
+`additionalProperties: false` and config merging is JSON merge-patch.
+
 ### Prerequisites beyond the normal ones
 
 * **CMake and Ninja.** `cef-dll-sys` compiles `libcef_dll_wrapper` from source.
@@ -160,12 +169,30 @@ Verified on Windows 11 / MSVC, at core `tauri-cef-v3.0.0-alpha.19` (CEF 150):
 * `cargo check` and `cargo build` pass for **both** `--features cef` and the
   default `wry` build.
 * `bun run dev:cef` launches and renders the app correctly.
+* `bun run build:cef` produces a working NSIS installer with the full CEF
+  runtime bundled alongside the binary — `libcef.dll`, `resources.pak`,
+  `icudtl.dat`, 220 locale packs, ANGLE and SwiftShader.
 * The `wry` build is unaffected by the patch table.
+
+**Size.** Both installers built from this tree, same version, NSIS only:
+
+| Runtime | `..._x64-setup.exe` |
+|---|---|
+| wry (default) | 9.7 MB |
+| cef | 124.0 MB |
+
+~13× larger, and essentially all of the difference is `libcef.dll` — 276 MB on
+disk before compression. That is inherent to shipping Chromium rather than
+borrowing the OS webview, and it is the main thing to weigh before taking CEF
+any further.
+
+`build:cef` exits non-zero at the very end without `TAURI_SIGNING_PRIVATE_KEY`
+set — the updater signs its artifact after bundling, so the installer is already
+written by then. Verified not CEF-specific: `build:tauri` fails identically.
 
 Not verified: macOS and Linux (the CEF runtime needs helper-app bundling on
 macOS and an `$ORIGIN` rpath on Linux — upstream handles both, but neither has
-been exercised here), and the bundlers (`build:cef` produces msi/nsis that
-nobody has installed yet).
+been exercised here), and nobody has actually *run* the produced installer.
 
 Known upstream issues worth watching: IPC breaks when DevTools is opened on
 Linux (tauri#15764), transparency renders a black screen (tauri#15718).

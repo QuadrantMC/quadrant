@@ -1,0 +1,11 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli-cef/config.schema.json",
+  "bundle": {
+    "windows": {
+      "webviewInstallMode": {
+        "type": "skip",
+        "silent": null
+      }
+    }
+  }
+}
