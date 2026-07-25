@@ -19,7 +19,7 @@ published core is still 2.11.x. What exists is:
 
 The "v3" name only appears on the CLI npm package and the crate tags. The core
 crate still calls itself 2.11.x. The two counters are also not in sync: CLI
-`3.0.0-alpha.6` and crate tag `tauri-cef-v3.0.0-alpha.13` are different things.
+`3.0.0-alpha.6` and crate tag `tauri-cef-v3.0.0-alpha.19` are different things.
 
 **No frontend changes are required.** The renderer, `src/desktop/*`, and every
 `@tauri-apps/*` JS package are untouched by this.
@@ -71,7 +71,7 @@ explicitly.
 ```toml
 default = ["proprietary", "wry"]
 wry = ["tauri/wry"]
-cef = ["tauri/cef", "dep:cef-dll-sys"]
+cef = ["tauri/cef"]
 ```
 
 `tauri` itself is now `default-features = false` with Tauri's default list
@@ -115,7 +115,7 @@ re-exec would run per process.
 ### The patch table
 
 `[patch.crates-io]` in `src-tauri/Cargo.toml` redirects the Tauri crates to
-`tauri-cef-v3.0.0-alpha.13`, and fs/http/opener to plugins-workspace `feat/cef`.
+`tauri-cef-v3.0.0-alpha.19`, and fs/http/opener to plugins-workspace `feat/cef`.
 Patching is required rather than a plain git dependency because every
 `tauri-plugin-*` resolves `tauri` from crates.io; without it cargo links two
 incompatible copies of the same crate.
@@ -125,36 +125,41 @@ is a superset of the 2.11.5 release these crates already pinned, so both
 runtimes build from one source. Deleting the block returns you to plain
 crates.io Tauri; `wry` keeps working and `cef` stops compiling.
 
-Three upstream sharp edges the pins work around:
+One upstream sharp edge the pins work around:
 
-1. **schemars.** The CEF line bumped `tauri-utils` and `tauri-plugin` to
-   schemars 1.x. Released fs/http/opener build scripts still hand
-   `tauri_plugin::Builder` a schemars 0.8 `RootSchema`, which does not compile.
-   Patching those three to `feat/cef` fixes it; the other plugins never pass a
-   scope schema and build unmodified.
-2. **The tauri version floor.** alpha.13's `tauri` is 2.11.3, so the workspace
-   requirement had to relax from `2.11.5` to `2.11` or the patch is rejected as
-   not satisfying the requirement.
-3. **`cef-dll-sys`.** alpha.13 pins `cef = "=148.0.0"` but leaves `cef-dll-sys`
-   on a caret requirement, so cargo resolves 148.4.0 against 148.0.0's generated
-   bindings and `cef` fails with `no variant ...
-   CEF_CONTENT_SETTING_TYPE_SUB_APP_INSTALLATION_PROMPTS`. `src-tauri` takes a
-   direct `cef-dll-sys = "=148.0.0"` dependency purely to pin it. Upstream fixed
-   this after alpha.13; drop the dependency when the pins move past it.
+* **schemars.** The CEF line bumped `tauri-utils` and `tauri-plugin` to
+  schemars 1.x. Released fs/http/opener build scripts still hand
+  `tauri_plugin::Builder` a schemars 0.8 `RootSchema`, which does not compile.
+  Patching those three to `feat/cef` fixes it; the other plugins never pass a
+  scope schema and build unmodified.
 
-### Why alpha.13 and not the newest tag
+The workspace `tauri` requirement is also relaxed from `2.11.5` to `2.11`.
+alpha.19 happens to be 2.11.5 again, but the tag ranges over 2.11.3–2.11.5 and a
+`2.11.5` floor makes cargo reject the patch outright as not satisfying the
+requirement.
 
-`tauri-cef-v3.0.0-alpha.19` exists, but plugins-workspace `feat/cef` is pinned
-to alpha.13 upstream, and the plugin patches have to agree with the core. The
-commits between the two are mostly macOS and Linux fixes. Moving up means
-bumping both pins together and re-verifying.
+### On the core/plugin version skew
+
+plugins-workspace `feat/cef` is pinned to `tauri-cef-v3.0.0-alpha.13` upstream,
+one tag family behind the core pinned here. The three patched plugins build and
+run fine against alpha.19 — nothing in the 57 commits between the tags touches
+the `tauri-plugin` build API they use. Worth re-checking whenever either pin
+moves.
+
+alpha.19 is worth the skew on Windows: it carries `fix(cef): ensure proper
+z-order for child webviews on Windows`, `fix(runtime): defer ACL build until
+after runtime init to avoid CEF allocator race`, a `HDC` handle leak fix in the
+Windows DPI getter, and the `cef-dll-sys` lock (alpha.13 pinned `cef` exactly
+but left its sys crate on a caret, so cargo resolved mismatched bindings and
+`cef` failed to compile). It also moves CEF 148 → 150.
 
 ## Status
 
-Verified on Windows 11 / MSVC:
+Verified on Windows 11 / MSVC, at core `tauri-cef-v3.0.0-alpha.19` (CEF 150):
 
 * `cargo check` and `cargo build` pass for **both** `--features cef` and the
   default `wry` build.
+* `bun run dev:cef` launches and renders the app correctly.
 * The `wry` build is unaffected by the patch table.
 
 Not verified: macOS and Linux (the CEF runtime needs helper-app bundling on

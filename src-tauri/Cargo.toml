@@ -62,9 +62,9 @@ sha1 = "0.11.0"
 # build against the CEF runtime without also dragging in WebView2/WebKitGTK.
 # The rest of this list is Tauri's `default` minus `wry`.
 #
-# The requirement is `2.11`, not `2.11.5`: the CEF patch below resolves to
-# 2.11.3, and a `2.11.5` floor would exclude it. Unpatched, cargo still picks
-# the newest 2.11.x.
+# The requirement is `2.11`, not `2.11.5`: the CEF tags range over 2.11.3–2.11.5
+# depending on which one is pinned, and a `2.11.5` floor makes cargo reject the
+# patch outright. Unpatched, cargo still picks the newest 2.11.x.
 tauri = { version = "2.11", default-features = false, features = [
     "tray-icon",
     "config-json5",
@@ -118,7 +118,7 @@ default = ["proprietary", "wry"]
 # `feat/cef` branch — see CEF.md. Build it with:
 #   --no-default-features --features proprietary,cef
 wry = ["tauri/wry"]
-cef = ["tauri/cef", "dep:cef-dll-sys"]
+cef = ["tauri/cef"]
 telemetry = []
 curseforge = ["quadrant-core/curseforge", "quadrant-host/curseforge"]
 # Quadrant ID/Sync/Share
@@ -171,15 +171,6 @@ tauri-plugin-oauth = { workspace = true }
 zip = { workspace = true }
 url = { workspace = true }
 
-# Never referenced from our code — this exists purely to pin a version.
-# `tauri-runtime-cef` at alpha.13 pins `cef = "=148.0.0"` but leaves its
-# `cef-dll-sys` companion on a caret requirement, so cargo happily resolves
-# 148.4.0 against 148.0.0's generated bindings and `cef` fails to compile with
-# "no variant ... CEF_CONTENT_SETTING_TYPE_SUB_APP_INSTALLATION_PROMPTS".
-# Upstream fixed this after alpha.13 by locking both crates; this entry does the
-# same from our side. Drop it when the patch above moves past that fix.
-cef-dll-sys = { version = "=148.0.0", default-features = false, optional = true }
-
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = { workspace = true }
@@ -210,7 +201,7 @@ dbus-secret-service-keyring-store = { workspace = true }
 #
 # Two pins, and they have to move together:
 #
-#   * `tauri-cef-v3.0.0-alpha.13` in tauri-apps/tauri.
+#   * `tauri-cef-v3.0.0-alpha.19` in tauri-apps/tauri.
 #   * plugins-workspace `feat/cef` @ 1423992, which is pinned to exactly that
 #     tag upstream.
 #
@@ -224,14 +215,14 @@ dbus-secret-service-keyring-store = { workspace = true }
 # Tags, not branches: this is an actively-moving alpha, and a floating branch
 # would silently change what a build produces.
 [patch.crates-io]
-tauri = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
-tauri-build = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
-tauri-codegen = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
-tauri-macros = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
-tauri-plugin = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
-tauri-runtime = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
-tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
-tauri-utils = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
+tauri = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.19" }
+tauri-build = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.19" }
+tauri-codegen = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.19" }
+tauri-macros = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.19" }
+tauri-plugin = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.19" }
+tauri-runtime = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.19" }
+tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.19" }
+tauri-utils = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.19" }
 
 tauri-plugin-fs = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784" }
 tauri-plugin-http = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784" }
