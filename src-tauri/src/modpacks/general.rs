@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
+use crate::AppHandle;
 use quadrant_core::ports::Shell;
 use quadrant_host::QuadrantHost;
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 
 pub use quadrant_core::models::{InstalledModpack, LocalModpack, ModLoader, SyncInfo};
 

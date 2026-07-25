@@ -24,6 +24,27 @@ pub mod modpacks;
 pub mod other;
 pub mod tauri_adapter;
 
+#[cfg(not(any(feature = "wry", feature = "cef")))]
+compile_error!(
+    "a webview runtime is required: enable either the `wry` (default) or the `cef` feature"
+);
+
+/// The webview runtime this build was compiled against.
+///
+/// Tauri only defaults the `R` type parameter on `AppHandle`, `Context`,
+/// `TrayIcon`, … to `Wry` when its `wry` feature is enabled, so a CEF-only
+/// build cannot write bare `tauri::AppHandle`. Everything in this crate goes
+/// through the aliases below instead, which keeps both runtimes buildable from
+/// one set of command signatures.
+#[cfg(feature = "cef")]
+pub type TauriRuntime = tauri::Cef;
+#[cfg(all(feature = "wry", not(feature = "cef")))]
+pub type TauriRuntime = tauri::Wry;
+
+/// `tauri::AppHandle` bound to [`TauriRuntime`]. Import this — not
+/// `tauri::AppHandle` — in command signatures.
+pub type AppHandle = tauri::AppHandle<TauriRuntime>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub updated_modpacks: Vec<String>,
@@ -75,7 +96,7 @@ fn flatpak_host_shared_dir() -> Option<PathBuf> {
 /// has to be re-applied afterwards — the tray was already built from the
 /// config by the time `setup` runs.
 fn try_redirect_tray_icon(
-    tray: &tauri::tray::TrayIcon,
+    tray: &tauri::tray::TrayIcon<TauriRuntime>,
     image: Option<&tauri::image::Image<'static>>,
     shared_dir: &std::path::Path,
 ) -> Result<(), anyhow::Error> {
@@ -89,7 +110,7 @@ fn try_redirect_tray_icon(
 }
 
 fn redirect_tray_icon_for_flatpak(
-    tray: &tauri::tray::TrayIcon,
+    tray: &tauri::tray::TrayIcon<TauriRuntime>,
     image: Option<&tauri::image::Image<'static>>,
 ) {
     let Some(shared_dir) = flatpak_host_shared_dir() else {
@@ -104,7 +125,7 @@ fn redirect_tray_icon_for_flatpak(
 }
 
 fn build_quadrant_host(
-    app: &tauri::AppHandle,
+    app: &AppHandle,
     api_base_url: Option<String>,
 ) -> Result<QuadrantHost, anyhow::Error> {
     let data_dir = app
@@ -134,7 +155,7 @@ pub async fn run() {
     // built before `setup` runs, so keep a copy here — the Flatpak workaround
     // in `setup` has to re-apply it to move the file it writes.
     let tray_image = context.tray_icon().map(|image| image.clone().to_owned());
-    let mut builder = tauri::Builder::default().manage(Mutex::new(AppState {
+    let mut builder = tauri::Builder::<TauriRuntime>::new().manage(Mutex::new(AppState {
         updated_modpacks: vec![],
         is_update_enabled: false,
         update: None,
@@ -523,7 +544,7 @@ pub async fn run() {
 }
 
 #[tauri::command]
-async fn request_check_for_updates(app: tauri::AppHandle) -> Result<(), tauri::Error> {
+async fn request_check_for_updates(app: AppHandle) -> Result<(), tauri::Error> {
     // Gate every caller, not just the startup check: the renderer asks for an
     // update check on its own, so `--noupdater` (and msstore builds) have to be
     // honoured here too.
@@ -539,12 +560,12 @@ async fn request_check_for_updates(app: tauri::AppHandle) -> Result<(), tauri::E
 }
 
 #[tauri::command]
-async fn is_autoupdate_enabled(app: tauri::AppHandle) -> Result<bool, tauri::Error> {
+async fn is_autoupdate_enabled(app: AppHandle) -> Result<bool, tauri::Error> {
     let state = app.state::<Mutex<AppState>>();
     let state = state.lock().await;
     Ok(state.is_update_enabled)
 }
-async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
+async fn check_update(_app: AppHandle) -> Result<(), anyhow::Error> {
     #[cfg(feature = "updater")]
     {
         let app = _app;
@@ -631,7 +652,7 @@ async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
 }
 
 #[tauri::command]
-async fn install_update(app: tauri::AppHandle) -> Result<(), tauri::Error> {
+async fn install_update(app: AppHandle) -> Result<(), tauri::Error> {
     let state = app.state::<Mutex<AppState>>();
     let mut state = state.lock().await;
     let update = state.update.take();

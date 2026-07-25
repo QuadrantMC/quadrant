@@ -16,7 +16,10 @@
     "build:tauri": "tauri build",
     "tauri": "tauri",
     "tauri:macos:adhoc:build": "APPLE_SIGNING_IDENTITY=- tauri build --target aarch64-apple-darwin --bundles dmg",
-    "tauri:windows:build": "tauri-windows-bundle build"
+    "tauri:windows:build": "tauri-windows-bundle build",
+    "tauri:cef": "bun node_modules/@tauri-apps/cli-cef/tauri.js",
+    "dev:cef": "bun node_modules/@tauri-apps/cli-cef/tauri.js dev --features cef -- --no-default-features",
+    "build:cef": "bun node_modules/@tauri-apps/cli-cef/tauri.js build --features cef -- --no-default-features"
   },
   "dependencies": {
     "@fabianlars/tauri-plugin-oauth": "2.1.0",
@@ -48,6 +51,7 @@
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/postcss": "4.3.3",
     "@tauri-apps/cli": "2.11.4",
+    "@tauri-apps/cli-cef": "3.0.0-alpha.6",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

@@ -1,5 +1,6 @@
+use crate::AppHandle;
 use quadrant_host::QuadrantHost;
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 
 #[tauri::command]
 pub async fn get_quadrant_settings(app: AppHandle) -> Result<(), tauri::Error> {

@@ -52,6 +52,12 @@ fn maybe_reexec_with_linux_wayland_nvidia_workaround() {
 #[cfg(not(target_os = "linux"))]
 fn maybe_reexec_with_linux_wayland_nvidia_workaround() {}
 
+// CEF is multi-process: the same executable is re-launched as the renderer, GPU
+// and utility processes, distinguished only by a `--type=` argument. The macro
+// inserts that check at the very top of `main` and hands those launches to
+// `tauri::run_cef_helper_process()` — before the tokio runtime, the Wayland
+// re-exec, or anything else this binary would otherwise do per process.
+#[cfg_attr(feature = "cef", tauri::cef_entry_point)]
 fn main() {
     maybe_reexec_with_linux_wayland_nvidia_workaround();
 

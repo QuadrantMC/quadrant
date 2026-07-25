@@ -1,6 +1,7 @@
+use crate::AppHandle;
 use quadrant_core::ports::Shell;
 use quadrant_host::QuadrantHost;
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 
 use crate::tauri_adapter::TauriShell;
 

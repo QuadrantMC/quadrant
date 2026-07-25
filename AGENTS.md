@@ -19,6 +19,7 @@
 | Lint | `bun run lint` (ESLint flat config, `eslint.config.js`) |
 | Tauri dev without proprietary features | `bun tauri dev -- -- --no-default-features` |
 | Ad-hoc macOS DMG (no Apple cert) | `bun run tauri:macos:adhoc:build` |
+| Experimental CEF dev/build | `bun run dev:cef` / `bun run build:cef` — see **[CEF.md](CEF.md)** |
 
 There is **no format/typecheck script** beyond `tsc` inside `bun run build`. Prettier runs via ESLint (`eslint-plugin-prettier`).
 
@@ -68,6 +69,8 @@ Three crates, layered:
 - **`quadrant-host`** — embeds `quadrant-core` and provides concrete host services (e.g. keyring-backed `SecretStore`, event forwarding). Reusable across the Tauri shell and the Node addon.
 - **`quadrant-napi`** — Node N-API bindings (`QuadrantHostAddon`) wrapping `quadrant-host`, consumed by `scripts/quadrant-node`.
 - **`src-tauri/src`** is a thin shell over `quadrant-host`/`quadrant-core`: commands mostly forward arguments. Business logic changes belong in the crates, not here.
+
+Command signatures use `crate::AppHandle`, **never** `tauri::AppHandle`. The webview runtime is a feature (`wry` by default, `cef` experimental), and Tauri only defaults the `R` type parameter to `Wry` when its own `wry` feature is on — so bare `tauri::AppHandle` breaks the CEF build and can silently resolve to the wrong runtime. `lib.rs` exports `TauriRuntime` and the `AppHandle` alias; same idea for other runtime-generic types like `TrayIcon<TauriRuntime>`. See **[CEF.md](CEF.md)**.
 
 ## Build order & gotchas
 

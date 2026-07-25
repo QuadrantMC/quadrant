@@ -11,12 +11,12 @@ use quadrant_core::{
     ports::{EventSink, Notifier, RuntimeState, SecretStore, Shell},
 };
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Mutex;
 
-use crate::AppState;
+use crate::{AppHandle, AppState};
 
 static KEYRING_STORE_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 

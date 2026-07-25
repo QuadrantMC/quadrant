@@ -1,5 +1,6 @@
+use crate::AppHandle;
 use quadrant_host::QuadrantHost;
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 
 pub mod id;
 pub mod quadrant_settings_sync;

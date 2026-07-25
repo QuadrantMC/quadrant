@@ -57,7 +57,23 @@ rss = "2.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha1 = "0.11.0"
-tauri = { version = "2.11.5", features = ["tray-icon", "config-json5"] }
+# `wry` is deliberately *not* in this list: the runtime is picked by the
+# `wry`/`cef` features of the app crate below, so that `--features cef` can
+# build against the CEF runtime without also dragging in WebView2/WebKitGTK.
+# The rest of this list is Tauri's `default` minus `wry`.
+#
+# The requirement is `2.11`, not `2.11.5`: the CEF patch below resolves to
+# 2.11.3, and a `2.11.5` floor would exclude it. Unpatched, cargo still picks
+# the newest 2.11.x.
+tauri = { version = "2.11", default-features = false, features = [
+    "tray-icon",
+    "config-json5",
+    "compression",
+    "common-controls-v6",
+    "dynamic-acl",
+    "x11",
+    "dbus",
+] }
 tauri-build = { version = "2.6.3", features = [] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-cli = "2.4.1"
@@ -95,7 +111,14 @@ name = "quadrant_next_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-default = ["proprietary"]
+default = ["proprietary", "wry"]
+# Webview runtime. Exactly one of these should be enabled.
+# `wry` is the shipping runtime (WebView2 / WKWebView / WebKitGTK).
+# `cef` is the experimental Chromium Embedded Framework runtime from Tauri's
+# `feat/cef` branch — see CEF.md. Build it with:
+#   --no-default-features --features proprietary,cef
+wry = ["tauri/wry"]
+cef = ["tauri/cef", "dep:cef-dll-sys"]
 telemetry = []
 curseforge = ["quadrant-core/curseforge", "quadrant-host/curseforge"]
 # Quadrant ID/Sync/Share
@@ -148,6 +171,15 @@ tauri-plugin-oauth = { workspace = true }
 zip = { workspace = true }
 url = { workspace = true }
 
+# Never referenced from our code — this exists purely to pin a version.
+# `tauri-runtime-cef` at alpha.13 pins `cef = "=148.0.0"` but leaves its
+# `cef-dll-sys` companion on a caret requirement, so cargo happily resolves
+# 148.4.0 against 148.0.0's generated bindings and `cef` fails to compile with
+# "no variant ... CEF_CONTENT_SETTING_TYPE_SUB_APP_INSTALLATION_PROMPTS".
+# Upstream fixed this after alpha.13 by locking both crates; this entry does the
+# same from our side. Drop it when the patch above moves past that fix.
+cef-dll-sys = { version = "=148.0.0", default-features = false, optional = true }
+
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = { workspace = true }
@@ -163,6 +195,47 @@ apple-native-keyring-store = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus-secret-service-keyring-store = { workspace = true }
+
+# The CEF runtime (`tauri-runtime-cef`) is not published to crates.io — it only
+# exists on Tauri's `feat/cef` line, which is what the unreleased
+# `@tauri-apps/cli-cef@3` alpha targets. Patching rather than depending on the
+# git repo directly is required because every `tauri-plugin-*` we use resolves
+# `tauri` from crates.io; without the patch cargo would link two incompatible
+# copies of the same crate.
+#
+# The redirect applies to the `wry` build too. That is intentional: the CEF line
+# is a superset of the 2.11.5 release these crates already pin, so both runtimes
+# build from one source of truth. Delete this whole block to go back to plain
+# crates.io Tauri — the `cef` feature stops compiling, `wry` keeps working.
+#
+# Two pins, and they have to move together:
+#
+#   * `tauri-cef-v3.0.0-alpha.13` in tauri-apps/tauri.
+#   * plugins-workspace `feat/cef` @ 1423992, which is pinned to exactly that
+#     tag upstream.
+#
+# The plugin patches are not optional. The CEF line bumped `tauri-utils` and
+# `tauri-plugin` to schemars 1.x, while the *released* fs/http/opener build
+# scripts still hand `tauri_plugin::Builder` a schemars 0.8 `RootSchema` — that
+# combination fails to compile. Only these three pass a scope schema; the other
+# plugins build unmodified against the patched `tauri-plugin`. Their versions on
+# the branch match the ones pinned in `[workspace.dependencies]` exactly.
+#
+# Tags, not branches: this is an actively-moving alpha, and a floating branch
+# would silently change what a build produces.
+[patch.crates-io]
+tauri = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
+tauri-build = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
+tauri-codegen = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
+tauri-macros = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
+tauri-plugin = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
+tauri-runtime = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
+tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
+tauri-utils = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.13" }
+
+tauri-plugin-fs = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784" }
+tauri-plugin-http = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784" }
+tauri-plugin-opener = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "1423992771e0b57582ca3b06a6adc46ec26aa784" }
 
 [profile.dev]
 opt-level = 0

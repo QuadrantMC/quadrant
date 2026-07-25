@@ -1,5 +1,6 @@
+use crate::AppHandle;
 use quadrant_host::QuadrantHost;
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 
 pub use quadrant_core::mc_mod::{
     GetModArgs, GlobalSearchModsArgs, IdentifiedMod, MinecraftVersion, Mod, ModType,
