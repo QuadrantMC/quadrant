@@ -67,6 +67,9 @@
         }
       ]
     },
+    "http": {
+      "scopeRedirects": true
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3MEJDMDAxMjA4NjlBQ0MKUldUTW1vWWdBY0FMcCtkS3FwaTlKSzBaMHpXaW4ramRLS1ludmVyUEZpSUY3Mmc0cm1zeGUvRGIK",
       "endpoints": [
