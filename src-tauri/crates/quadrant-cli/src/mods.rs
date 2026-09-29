@@ -111,7 +111,8 @@ pub struct InstallArgs {
     /// [default: the Minecraft folder and Prism instances linked to the modpack]
     #[arg(long)]
     pub location: Option<String>,
-    /// Also install the mod's dependencies.
+    /// Also install the mod's dependencies. Modrinth lists optional
+    /// dependencies too, so this can install mods that aren't required.
     #[arg(long)]
     pub with_deps: bool,
 }
@@ -206,6 +207,7 @@ struct Installed {
     minecraft_version: String,
     mod_loader: ModLoader,
     dependencies: Vec<String>,
+    failed_dependencies: Vec<String>,
 }
 
 /// The config keys the install page and search filters remember choices in.
@@ -417,6 +419,7 @@ pub async fn install(ctx: &Ctx, request: InstallArgs) -> Result<Report> {
     .await?;
 
     let mut dependencies = Vec::new();
+    let mut failed_dependencies = Vec::new();
     if request.with_deps {
         let installed_mods = match &modpack {
             Some(name) => find_modpack(host, name).await?.mods,
@@ -429,20 +432,39 @@ pub async fn install(ctx: &Ctx, request: InstallArgs) -> Result<Report> {
             {
                 continue;
             }
-            host.install_mod(
-                dep.id.clone(),
-                version.clone(),
-                loader,
-                dep.source.clone(),
-                modpack.clone(),
-                dep.mod_type,
-                None,
-                request.location.clone(),
-            )
-            .await?;
-            dependencies.push(dep.name);
+            let result = host
+                .install_mod(
+                    dep.id.clone(),
+                    version.clone(),
+                    loader,
+                    dep.source.clone(),
+                    modpack.clone(),
+                    dep.mod_type,
+                    None,
+                    request.location.clone(),
+                )
+                .await;
+            match result {
+                Ok(()) => dependencies.push(dep.name),
+                Err(error) => {
+                    ctx.out.warn(format!(
+                        "Couldn't install the dependency {} ({}): {}",
+                        dep.name,
+                        dep.id,
+                        i18n::describe(error)
+                    ));
+                    failed_dependencies.push(dep.name);
+                }
+            }
         }
     }
+    let failure = (!failed_dependencies.is_empty()).then(|| {
+        anyhow!(
+            "couldn't install {} of the dependencies: {}",
+            failed_dependencies.len(),
+            failed_dependencies.join(", ")
+        )
+    });
 
     let installed = Installed {
         id: mod_.id,
@@ -453,8 +475,9 @@ pub async fn install(ctx: &Ctx, request: InstallArgs) -> Result<Report> {
         minecraft_version: version,
         mod_loader: loader,
         dependencies,
+        failed_dependencies,
     };
-    Report::new(&installed, |installed| {
+    Ok(Report::new(&installed, |installed| {
         let target = match &installed.modpack {
             Some(modpack) => format!(" into {modpack}"),
             None => String::new(),
@@ -477,7 +500,8 @@ pub async fn install(ctx: &Ctx, request: InstallArgs) -> Result<Report> {
             ));
         }
         text
-    })
+    })?
+    .failing_with(failure))
 }
 
 /// Picking a modpack, version or loader on the install page stores it for the
