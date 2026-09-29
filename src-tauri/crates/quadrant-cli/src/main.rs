@@ -63,6 +63,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Act on a mod, modpack or sign-in link like the desktop app does.
+    Open(deeplink::OpenArgs),
     /// List the Minecraft release versions mods can target.
     Versions,
     /// Show the Quadrant news feed.
@@ -175,6 +177,7 @@ async fn run(cli: Cli) -> Result<()> {
 
 async fn dispatch(command: Command, ctx: &Ctx) -> Result<Report> {
     match command {
+        Command::Open(link) => deeplink::open(link, ctx).await,
         Command::Versions => misc::versions(ctx).await,
         Command::News => misc::news(ctx).await,
         Command::Account(command) => account::run(command, ctx).await,

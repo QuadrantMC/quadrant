@@ -343,7 +343,7 @@ async fn search_mods(ctx: &Ctx, search: SearchArgs) -> Result<Report> {
     })
 }
 
-async fn install(ctx: &Ctx, request: InstallArgs) -> Result<Report> {
+pub async fn install(ctx: &Ctx, request: InstallArgs) -> Result<Report> {
     let host = &ctx.host;
     let mod_ =
         provider::get_mod(host, &request.source, provider::install_lookup(&request.id)).await?;

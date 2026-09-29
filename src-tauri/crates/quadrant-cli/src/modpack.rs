@@ -495,7 +495,7 @@ async fn identify(ctx: &Ctx, name: &str) -> Result<Report> {
     })
 }
 
-async fn import(ctx: &Ctx, code: &str, name: Option<String>) -> Result<Report> {
+pub async fn import(ctx: &Ctx, code: &str, name: Option<String>) -> Result<Report> {
     let code = deeplink::parse_share_code(code)
         .ok_or_else(|| anyhow!("expected a 7-digit share code or a {SHARE_URL}<code> link"))?;
     ctx.require_api_key()?;

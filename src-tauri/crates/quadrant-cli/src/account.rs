@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use clap::Subcommand;
 use serde_json::Value;
 
@@ -94,6 +94,23 @@ async fn login(ctx: &Ctx, no_browser: bool) -> Result<Report> {
     let code = tokio::time::timeout(LOGIN_TIMEOUT, oauth::wait_for_callback(listener, &state))
         .await
         .map_err(|_| anyhow!("the sign-in timed out; run `account login` again"))??;
+    finish_login(ctx, code, redirect_uri).await
+}
+
+/// Completes a sign-in from a `quadrantnext://login` link, which only counts
+/// when its state is the one `account login` stored.
+pub async fn login_from_link(
+    ctx: &Ctx,
+    state: Option<String>,
+    code: Option<String>,
+    redirect_uri: String,
+) -> Result<Report> {
+    ctx.require_account_build()?;
+    let expected = config::get_string(&ctx.host, OAUTH_STATE)?;
+    if state.is_none() || state != expected {
+        bail!("this sign-in link doesn't belong to the sign-in in progress");
+    }
+    let code = code.ok_or_else(|| anyhow!("the sign-in link has no code"))?;
     finish_login(ctx, code, redirect_uri).await
 }
 
