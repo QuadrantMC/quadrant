@@ -1,11 +1,13 @@
 mod args;
 mod config;
+mod content;
 mod deeplink;
 mod i18n;
 mod misc;
 mod modpack;
 mod mods;
 mod output;
+mod prism;
 mod provider;
 mod search;
 mod settings;
@@ -60,6 +62,12 @@ enum Command {
     /// Search, inspect, install and update mods and packs.
     #[command(name = "mod", subcommand)]
     Mod(mods::ModCommand),
+    /// Manage installed resource packs and shader packs.
+    #[command(subcommand)]
+    Content(content::ContentCommand),
+    /// Link modpacks to Prism Launcher instances.
+    #[command(subcommand)]
+    Prism(prism::PrismCommand),
     /// Read and change Quadrant settings.
     #[command(subcommand)]
     Settings(settings::SettingsCommand),
@@ -157,6 +165,8 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<Report> {
         Command::News => misc::news(ctx).await,
         Command::Modpack(command) => modpack::run(command, ctx).await,
         Command::Mod(command) => mods::run(command, ctx).await,
+        Command::Content(command) => content::run(command, ctx).await,
+        Command::Prism(command) => prism::run(command, ctx).await,
         Command::Settings(command) => settings::run(command, ctx).await,
         Command::Telemetry(command) => misc::telemetry(command, ctx).await,
         Command::Invoke {

@@ -214,14 +214,10 @@ const LAST_USED_LOADER: &str = "lastUsedAPI";
 const LAST_USED_MODPACK: &str = "lastUsedModpack";
 
 fn enabled_providers(ctx: &Ctx) -> Result<(bool, bool)> {
-    let enabled = |key| -> Result<bool> {
-        Ok(ctx
-            .host
-            .get_config_value(key)?
-            .and_then(|value| value.as_bool())
-            .unwrap_or(true))
-    };
-    Ok((enabled("curseforge")?, enabled("modrinth")?))
+    Ok((
+        config::get_bool(&ctx.host, "curseforge")?.unwrap_or(true),
+        config::get_bool(&ctx.host, "modrinth")?.unwrap_or(true),
+    ))
 }
 
 async fn categories(

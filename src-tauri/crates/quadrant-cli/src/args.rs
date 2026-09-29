@@ -10,6 +10,7 @@ pub const SOURCE_HELP: &str = "curseforge (cf) or modrinth (mr)";
 pub const LOADER_HELP: &str = "fabric, forge, neoforge, quilt, liteloader, babric, bta-babric, \
      java-agent, legacy-fabric, modloader, nilloader, ornithe, rift";
 pub const TYPE_HELP: &str = "mod, resourcepack, shaderpack, modpack, datapack";
+pub const PACK_TYPE_HELP: &str = "resourcepack or shaderpack";
 
 pub fn source(raw: &str) -> Result<ModSource, String> {
     match raw.trim().to_lowercase().as_str() {
@@ -30,6 +31,14 @@ pub fn content_type(raw: &str) -> Result<ModType, String> {
     match ModType::from(raw.trim().to_string()) {
         ModType::Unknown => Err(format!("expected one of: {TYPE_HELP}")),
         mod_type => Ok(mod_type),
+    }
+}
+
+/// A content type that can live in a content location: only packs can.
+pub fn pack_type(raw: &str) -> Result<ModType, String> {
+    match content_type(raw) {
+        Ok(mod_type @ (ModType::ResourcePack | ModType::ShaderPack)) => Ok(mod_type),
+        _ => Err(format!("expected {PACK_TYPE_HELP}")),
     }
 }
 
@@ -83,5 +92,12 @@ mod tests {
         assert_eq!(content_type("datapack"), Ok(ModType::DataPack));
         assert_eq!(content_type("ShaderPack"), Ok(ModType::ShaderPack));
         assert!(content_type("plugin").is_err());
+    }
+
+    #[test]
+    fn pack_types_only_accept_packs() {
+        assert_eq!(pack_type("shaderpack"), Ok(ModType::ShaderPack));
+        assert_eq!(pack_type("resourcepack"), Ok(ModType::ResourcePack));
+        assert!(pack_type("mod").is_err());
     }
 }
