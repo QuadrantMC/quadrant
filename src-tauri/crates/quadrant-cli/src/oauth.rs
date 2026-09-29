@@ -1,6 +1,8 @@
 //! The loopback OAuth sign-in `AccountPage.tsx` runs, without the Tauri
 //! OAuth plugin: a one-shot HTTP listener on 127.0.0.1 receives the redirect.
 
+use std::time::Duration;
+
 use anyhow::{Result, anyhow, bail};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -16,6 +18,9 @@ const SCOPES: &str = "profile:read profile:write sync:read sync:write share:read
 /// The redirect URIs registered for the Quadrant client.
 const PORTS: std::ops::RangeInclusive<u16> = 4000..=4005;
 const MAX_REQUEST_HEAD: usize = 16 * 1024;
+/// How long one connection gets to send its request, so an idle connection a
+/// browser opens ahead of time can't hold up the redirect behind it.
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn new_state() -> Result<String> {
     let mut bytes = [0u8; 24];
@@ -61,6 +66,7 @@ pub enum Callback {
     },
     Denied {
         error: String,
+        state: Option<String>,
     },
 }
 
@@ -75,7 +81,10 @@ pub fn parse_callback(target: &str) -> Callback {
             .map(|(_, value)| value.into_owned())
     };
     match (param("code"), param("error")) {
-        (_, Some(error)) => Callback::Denied { error },
+        (_, Some(error)) => Callback::Denied {
+            error,
+            state: param("state"),
+        },
         (Some(code), None) => Callback::Code {
             code,
             state: param("state"),
@@ -84,27 +93,60 @@ pub fn parse_callback(target: &str) -> Callback {
     }
 }
 
-/// Answers requests until the redirect arrives and returns its code, once
-/// its state matches the one this sign-in started with.
+/// What a request means for the sign-in waiting on it.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    NotTheRedirect,
+    /// A redirect for another sign-in, such as a stale tab's. It is refused
+    /// and the wait goes on, so it can't cancel this sign-in.
+    Foreign,
+    Denied(String),
+    Code(String),
+}
+
+fn judge(callback: Callback, expected_state: &str) -> Verdict {
+    match callback {
+        Callback::Ignored => Verdict::NotTheRedirect,
+        Callback::Code { state, .. } | Callback::Denied { state, .. }
+            if state.as_deref() != Some(expected_state) =>
+        {
+            Verdict::Foreign
+        }
+        Callback::Code { code, .. } => Verdict::Code(code),
+        Callback::Denied { error, .. } => Verdict::Denied(error),
+    }
+}
+
+/// Answers requests until the redirect for this sign-in arrives and returns
+/// its code.
 pub async fn wait_for_callback(listener: TcpListener, expected_state: &str) -> Result<String> {
+    serve(listener, expected_state, READ_TIMEOUT).await
+}
+
+async fn serve(
+    listener: TcpListener,
+    expected_state: &str,
+    read_timeout: Duration,
+) -> Result<String> {
     loop {
         let (mut stream, _) = listener.accept().await?;
-        let Some(target) = read_request_target(&mut stream).await else {
+        let Ok(Some(target)) =
+            tokio::time::timeout(read_timeout, read_request_target(&mut stream)).await
+        else {
             continue;
         };
-        match parse_callback(&target) {
-            Callback::Ignored => {
-                respond(&mut stream, "404 Not Found", "").await;
+        match judge(parse_callback(&target), expected_state) {
+            Verdict::NotTheRedirect => respond(&mut stream, "404 Not Found", "").await,
+            Verdict::Foreign => {
+                let page = page("This sign-in answer belongs to another sign-in. Close this tab.");
+                respond(&mut stream, "400 Bad Request", &page).await;
             }
-            Callback::Denied { error } => {
+            Verdict::Denied(error) => {
                 respond(&mut stream, "200 OK", &done_page()).await;
                 bail!("the sign-in was not completed: {error}");
             }
-            Callback::Code { code, state } => {
+            Verdict::Code(code) => {
                 respond(&mut stream, "200 OK", &done_page()).await;
-                if state.as_deref() != Some(expected_state) {
-                    bail!("the sign-in answer doesn't match this sign-in; try again");
-                }
                 return Ok(code);
             }
         }
@@ -137,7 +179,10 @@ async fn respond(stream: &mut TcpStream, status: &str, body: &str) {
 }
 
 fn done_page() -> String {
-    let message = i18n::translate("returnToTheApp").unwrap_or("You can close this tab.");
+    page(i18n::translate("returnToTheApp").unwrap_or("You can close this tab."))
+}
+
+fn page(message: &str) -> String {
     format!("<html><body><h1>{message}</h1></body></html>")
 }
 
@@ -180,9 +225,36 @@ mod tests {
         assert_eq!(
             parse_callback("/?error=access_denied&state=abc"),
             Callback::Denied {
-                error: "access_denied".into()
+                error: "access_denied".into(),
+                state: Some("abc".into())
             }
         );
+    }
+
+    #[test]
+    fn only_this_sign_ins_state_can_finish_or_cancel_it() {
+        let code = |state: Option<&str>| Callback::Code {
+            code: "xyz".into(),
+            state: state.map(Into::into),
+        };
+        let denied = |state: Option<&str>| Callback::Denied {
+            error: "access_denied".into(),
+            state: state.map(Into::into),
+        };
+        assert_eq!(judge(code(Some("abc")), "abc"), Verdict::Code("xyz".into()));
+        assert_eq!(
+            judge(denied(Some("abc")), "abc"),
+            Verdict::Denied("access_denied".into())
+        );
+        for foreign in [
+            code(Some("other")),
+            code(None),
+            denied(Some("other")),
+            denied(None),
+        ] {
+            assert_eq!(judge(foreign, "abc"), Verdict::Foreign);
+        }
+        assert_eq!(judge(Callback::Ignored, "abc"), Verdict::NotTheRedirect);
     }
 
     async fn send(port: u16, target: &str) -> String {
@@ -210,12 +282,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loopback_rejects_a_foreign_state() {
+    async fn loopback_refuses_foreign_answers_and_keeps_waiting() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let waiting = tokio::spawn(wait_for_callback(listener, "abc"));
 
-        send(port, "/?code=the-code&state=someone-else").await;
-        assert!(waiting.await.unwrap().is_err());
+        let refused = send(port, "/?code=stale&state=someone-else").await;
+        assert!(refused.starts_with("HTTP/1.1 400"), "{refused}");
+        assert!(refused.contains("another sign-in"), "{refused}");
+        let refused = send(port, "/?error=access_denied&state=someone-else").await;
+        assert!(refused.starts_with("HTTP/1.1 400"), "{refused}");
+        assert!(!waiting.is_finished());
+
+        send(port, "/?code=the-code&state=abc").await;
+        assert_eq!(waiting.await.unwrap().unwrap(), "the-code");
+    }
+
+    #[tokio::test]
+    async fn loopback_stops_on_a_denial_for_this_sign_in() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let waiting = tokio::spawn(wait_for_callback(listener, "abc"));
+
+        send(port, "/?error=access_denied&state=abc").await;
+        let error = waiting.await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("access_denied"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn an_idle_connection_times_out_instead_of_blocking_the_redirect() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let waiting =
+            tokio::spawn(async move { serve(listener, "abc", Duration::from_millis(200)).await });
+
+        let _idle = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let page = send(port, "/?code=the-code&state=abc").await;
+        assert!(page.starts_with("HTTP/1.1 200"));
+        assert_eq!(waiting.await.unwrap().unwrap(), "the-code");
     }
 }
