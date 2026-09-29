@@ -124,8 +124,15 @@ fn progress_line(event: &HostEventEnvelope) -> Option<(String, bool)> {
                 event.payload.get("progress")?.as_f64()?,
             )
         }
-        "modpackDownloadProgress" => ("Downloading modpack".to_string(), event.payload.as_f64()?),
-        "quadrantExportProgress" => ("Exporting modpack".to_string(), event.payload.as_f64()?),
+        // Modpack progress arrives as a fraction of 1, mod progress in percent.
+        "modpackDownloadProgress" => (
+            "Downloading modpack".to_string(),
+            event.payload.as_f64()? * 100.0,
+        ),
+        "quadrantExportProgress" => (
+            "Exporting modpack".to_string(),
+            event.payload.as_f64()? * 100.0,
+        ),
         _ => return None,
     };
     Some((format!("{label}: {percent:.0}%"), percent >= 100.0))
@@ -212,8 +219,16 @@ mod tests {
             Some(("Downloading sodium: 40%".to_string(), false))
         );
         assert_eq!(
-            progress_line(&event("quadrantExportProgress", json!(100.0))),
+            progress_line(&event("quadrantExportProgress", json!(0.5))),
+            Some(("Exporting modpack: 50%".to_string(), false))
+        );
+        assert_eq!(
+            progress_line(&event("quadrantExportProgress", json!(1.0))),
             Some(("Exporting modpack: 100%".to_string(), true))
+        );
+        assert_eq!(
+            progress_line(&event("modpackDownloadProgress", json!(1))),
+            Some(("Downloading modpack: 100%".to_string(), true))
         );
         assert_eq!(
             progress_line(&event("refreshNotifications", json!([]))),
