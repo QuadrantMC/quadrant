@@ -4497,6 +4497,7 @@ dependencies = [
  "quadrant-host",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "url",
 ]

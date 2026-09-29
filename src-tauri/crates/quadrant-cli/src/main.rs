@@ -1,6 +1,8 @@
+mod config;
 mod i18n;
 mod misc;
 mod output;
+mod settings;
 
 use std::{path::PathBuf, process::ExitCode};
 
@@ -46,6 +48,9 @@ enum Command {
     Versions,
     /// Show the Quadrant news feed.
     News,
+    /// Read and change Quadrant settings.
+    #[command(subcommand)]
+    Settings(settings::SettingsCommand),
     /// Inspect or send usage telemetry.
     #[command(subcommand)]
     Telemetry(misc::TelemetryCommand),
@@ -139,6 +144,7 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<Report> {
     match command {
         Command::Versions => misc::versions(ctx).await,
         Command::News => misc::news(ctx).await,
+        Command::Settings(command) => settings::run(command, ctx).await,
         Command::Telemetry(command) => misc::telemetry(command, ctx).await,
         Command::Invoke {
             command,
