@@ -41,6 +41,7 @@ prepare() {
 
 package() {
     install -Dm755 "${srcdir}/usr/bin/${pkgname%-bin}_next" "${pkgdir}/usr/bin/${pkgname%-bin}"
+    install -Dm755 "${srcdir}/usr/bin/quadrantmc" "${pkgdir}/usr/bin/quadrantmc"
     cp -a "${srcdir}/usr/lib" "${pkgdir}/usr"
     find "${srcdir}" -type f \( -name "*.png" -o -name "*.svg" \) -path "*share/icons/*" | while read -r _i; do
         _extension="${_i##*.}"
