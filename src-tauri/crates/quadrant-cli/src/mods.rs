@@ -455,10 +455,17 @@ async fn install(ctx: &Ctx, request: InstallArgs) -> Result<Report> {
             Some(modpack) => format!(" into {modpack}"),
             None => String::new(),
         };
-        let mut text = format!(
-            "Installed {}{target} ({}, {}).",
-            installed.name, installed.minecraft_version, installed.mod_loader
-        );
+        let mut text = if installed.mod_type == ModType::Mod {
+            format!(
+                "Installed {}{target} ({}, {}).",
+                installed.name, installed.minecraft_version, installed.mod_loader
+            )
+        } else {
+            format!(
+                "Installed {}{target} ({}).",
+                installed.name, installed.minecraft_version
+            )
+        };
         if !installed.dependencies.is_empty() {
             text.push_str(&format!(
                 "\nDependencies: {}",
