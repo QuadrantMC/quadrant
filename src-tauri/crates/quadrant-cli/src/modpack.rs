@@ -135,7 +135,7 @@ pub async fn run(command: ModpackCommand, ctx: &Ctx) -> Result<Report> {
                             modpack.name.clone(),
                             modpack.version.clone(),
                             modpack.mod_loader.to_string(),
-                            format!("{} mods", modpack.mods.len()),
+                            mod_count(modpack.mods.len()),
                             modpack_flags(modpack),
                         ]
                     })
@@ -230,6 +230,9 @@ pub async fn run(command: ModpackCommand, ctx: &Ctx) -> Result<Report> {
             let destination = std::path::absolute(
                 output.unwrap_or_else(|| PathBuf::from(format!("{name}.quadrantExport.zip"))),
             )?;
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
             let _progress = ctx.out.track_progress(host);
             host.export_modpack_to(name, destination.clone()).await?;
             Report::new(&destination, |destination| {
@@ -512,18 +515,26 @@ pub async fn import(ctx: &Ctx, code: &str, name: Option<String>) -> Result<Repor
 fn describe_modpack<const N: usize>(modpack: &LocalModpack, rows: &[[String; N]]) -> String {
     let flags = modpack_flags(modpack);
     let mut text = format!(
-        "{}  {}  {}{}{flags}\n{} mods",
+        "{}  {}  {}{}{flags}\n{}",
         modpack.name,
         modpack.version,
         modpack.mod_loader,
         if flags.is_empty() { "" } else { "  " },
-        modpack.mods.len()
+        mod_count(modpack.mods.len())
     );
     if !rows.is_empty() {
         text.push_str("\n\n");
         text.push_str(&table(rows));
     }
     text
+}
+
+fn mod_count(count: usize) -> String {
+    if count == 1 {
+        "1 mod".to_string()
+    } else {
+        format!("{count} mods")
+    }
 }
 
 fn installed_rows(mods: &[InstalledMod]) -> Vec<[String; 4]> {
