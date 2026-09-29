@@ -13,9 +13,9 @@
     "test:watch": "vitest",
     "preview": "vite preview",
     "dev:tauri": "tauri dev",
-    "build:tauri": "tauri build",
+    "build:tauri": "tauri build --config src-tauri/tauri.cli.conf.json",
     "tauri": "tauri",
-    "tauri:macos:adhoc:build": "APPLE_SIGNING_IDENTITY=- tauri build --target aarch64-apple-darwin --bundles dmg",
+    "tauri:macos:adhoc:build": "APPLE_SIGNING_IDENTITY=- tauri build --config src-tauri/tauri.cli.conf.json --target aarch64-apple-darwin --bundles dmg",
     "tauri:windows:build": "tauri-windows-bundle build"
   },
   "dependencies": {
