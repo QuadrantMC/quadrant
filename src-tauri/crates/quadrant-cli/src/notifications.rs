@@ -26,8 +26,13 @@ pub enum NotificationsCommand {
     Accept { id: String },
     /// Decline the Quadrant Sync invite a notification carries.
     Decline { id: String },
-    /// Print notifications as they arrive until Ctrl+C. Runs the app's
-    /// background sync while it waits.
+    /// Print notifications until Ctrl+C while running the desktop app's
+    /// background workers, which sync settings and can update modpacks.
+    ///
+    /// Those workers change state: settings sync may pull the cloud settings
+    /// over the local ones or push the local ones, modpacks with a remote
+    /// update are updated when autoQuadrantSync is on, and the notification
+    /// cursor the desktop app shares moves forward.
     Watch,
 }
 
@@ -149,7 +154,7 @@ async fn watch(ctx: &Ctx) -> Result<Report> {
         }
     }
     host.stop_background_workers().await?;
-    Ok(Report::message(""))
+    Ok(Report::streamed())
 }
 
 fn show(notification: Notification) -> Shown {

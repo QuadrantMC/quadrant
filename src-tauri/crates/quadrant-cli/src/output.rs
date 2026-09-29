@@ -17,7 +17,8 @@ use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
 /// reads otherwise, plus the failure a command that partly succeeded still
 /// exits with once that is printed.
 pub struct Report {
-    json: Value,
+    /// `None` for a command that printed its results as they came.
+    json: Option<Value>,
     human: String,
     failure: Option<Error>,
 }
@@ -25,7 +26,7 @@ pub struct Report {
 impl Report {
     pub fn new<T: Serialize>(value: &T, human: impl FnOnce(&T) -> String) -> Result<Self> {
         Ok(Self {
-            json: serde_json::to_value(value)?,
+            json: Some(serde_json::to_value(value)?),
             human: human(value),
             failure: None,
         })
@@ -34,8 +35,18 @@ impl Report {
     /// A command with no result value, which prints `null` under `--json`.
     pub fn message(text: impl Into<String>) -> Self {
         Self {
-            json: Value::Null,
+            json: Some(Value::Null),
             human: text.into(),
+            failure: None,
+        }
+    }
+
+    /// A command that streamed its output, so nothing is left to print, not
+    /// even the `null` that stands for "no value" under `--json`.
+    pub fn streamed() -> Self {
+        Self {
+            json: None,
+            human: String::new(),
             failure: None,
         }
     }
@@ -43,6 +54,18 @@ impl Report {
     /// Prints the result, then fails the command with `failure` if there is one.
     pub fn failing_with(self, failure: Option<Error>) -> Self {
         Self { failure, ..self }
+    }
+
+    /// The text stdout gets, if any.
+    fn rendered(&self, json: bool) -> Result<Option<String>> {
+        Ok(if json {
+            self.json
+                .as_ref()
+                .map(serde_json::to_string_pretty)
+                .transpose()?
+        } else {
+            Some(self.human.trim_end().to_string()).filter(|text| !text.trim().is_empty())
+        })
     }
 }
 
@@ -54,11 +77,8 @@ pub struct Output {
 
 impl Output {
     pub fn print(&self, report: Report) -> Result<()> {
-        let mut stdout = std::io::stdout().lock();
-        if self.json {
-            writeln!(stdout, "{}", serde_json::to_string_pretty(&report.json)?)?;
-        } else if !report.human.trim().is_empty() {
-            writeln!(stdout, "{}", report.human.trim_end())?;
+        if let Some(text) = report.rendered(self.json)? {
+            writeln!(std::io::stdout().lock(), "{text}")?;
         }
         match report.failure {
             Some(failure) => Err(failure),
@@ -256,6 +276,15 @@ mod tests {
             progress_line(&event("refreshNotifications", json!([]))),
             None
         );
+    }
+
+    #[test]
+    fn json_prints_null_for_a_message_and_nothing_after_a_stream() {
+        let message = Report::message("Done.");
+        assert_eq!(message.rendered(true).unwrap().as_deref(), Some("null"));
+        assert_eq!(message.rendered(false).unwrap().as_deref(), Some("Done."));
+        assert_eq!(Report::streamed().rendered(true).unwrap(), None);
+        assert_eq!(Report::streamed().rendered(false).unwrap(), None);
     }
 
     #[test]

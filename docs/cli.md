@@ -115,7 +115,7 @@ quadrant-cli sync share MODPACK_ID
 
 `account login` signs in the way the app does. It opens the browser and prints the link, then waits up to five minutes for the redirect on the first free port of `127.0.0.1:4000` to `4005`. The login lands in the OS keyring, so the desktop app is signed in too, and `account logout` signs both out.
 
-`notifications list` hides what the app hides: modpack update notices when they are turned off, and ones for updates you made yourself. `--all` shows them. `notifications watch` runs the app's background workers, the same notification stream and settings sync the app runs, and prints new notifications until Ctrl+C.
+`notifications list` hides what the app hides: modpack update notices when they are turned off, and ones for updates you made yourself. `--all` shows them. `notifications watch` prints new notifications until Ctrl+C, one JSON object per line under `--json`. It does so by running the desktop app's background workers, which change state, not only read it. Settings sync may pull the cloud settings over the local ones or push the local ones. When `autoQuadrantSync` is on, modpacks with a remote update get it applied. The notification cursor, which the desktop app shares, moves forward.
 
 `sync push` refuses to overwrite a newer cloud copy unless `--force` is passed. `sync pull` installs the cloud copy under the name of the local modpack it is linked to.
 
