@@ -1,7 +1,11 @@
+mod args;
 mod config;
+mod deeplink;
 mod i18n;
 mod misc;
+mod modpack;
 mod output;
+mod provider;
 mod settings;
 
 use std::{path::PathBuf, process::ExitCode};
@@ -48,6 +52,9 @@ enum Command {
     Versions,
     /// Show the Quadrant news feed.
     News,
+    /// Create, apply, export and update modpacks.
+    #[command(subcommand)]
+    Modpack(modpack::ModpackCommand),
     /// Read and change Quadrant settings.
     #[command(subcommand)]
     Settings(settings::SettingsCommand),
@@ -104,8 +111,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            let error = quadrant_host::user_facing(error);
-            eprintln!("Error: {}", i18n::describe_error(&format!("{error:#}")));
+            eprintln!("Error: {}", i18n::describe(error));
             ExitCode::FAILURE
         }
     }
@@ -144,6 +150,7 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<Report> {
     match command {
         Command::Versions => misc::versions(ctx).await,
         Command::News => misc::news(ctx).await,
+        Command::Modpack(command) => modpack::run(command, ctx).await,
         Command::Settings(command) => settings::run(command, ctx).await,
         Command::Telemetry(command) => misc::telemetry(command, ctx).await,
         Command::Invoke {

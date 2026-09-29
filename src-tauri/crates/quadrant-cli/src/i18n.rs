@@ -11,6 +11,11 @@ pub fn translate(key: &str) -> Option<&'static str> {
     ENGLISH.get(key).and_then(Value::as_str)
 }
 
+/// The text to show for a failed operation.
+pub fn describe(error: anyhow::Error) -> String {
+    describe_error(&format!("{:#}", quadrant_host::user_facing(error)))
+}
+
 /// The text to show for an error message, mirroring `describeError` in
 /// `src/errors.ts`: the backend sends i18n keys for failures it classified,
 /// and anything else is shown as it came.

@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use quadrant_host::{HostEventEnvelope, QuadrantHost};
 use serde::Serialize;
 use serde_json::Value;
@@ -131,6 +131,37 @@ fn progress_line(event: &HostEventEnvelope) -> Option<(String, bool)> {
     Some((format!("{label}: {percent:.0}%"), percent >= 100.0))
 }
 
+/// Cloud records store sync dates in seconds and local ones in milliseconds;
+/// the cutoff `syncDates.ts` uses tells them apart.
+pub fn sync_date(timestamp: i64) -> String {
+    let millis = if timestamp <= 170_406_720_000 {
+        timestamp.saturating_mul(1000)
+    } else {
+        timestamp
+    };
+    chrono::DateTime::from_timestamp_millis(millis)
+        .map(|date| date.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_default()
+}
+
+/// Asks before something that cannot be undone. `--yes` answers for the user,
+/// and without a terminal to ask on the answer is no.
+pub fn confirm(question: &str, yes: bool) -> Result<()> {
+    if yes {
+        return Ok(());
+    }
+    if !std::io::stdin().is_terminal() {
+        bail!("{question} Pass --yes to confirm.");
+    }
+    eprint!("{question} [y/N] ");
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    match answer.trim().to_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => bail!("Cancelled."),
+    }
+}
+
 /// Pads rows into left-aligned columns separated by two spaces.
 pub fn table<const N: usize>(rows: &[[String; N]]) -> String {
     let mut widths = [0usize; N];
@@ -188,6 +219,12 @@ mod tests {
             progress_line(&event("refreshNotifications", json!([]))),
             None
         );
+    }
+
+    #[test]
+    fn sync_dates_accept_seconds_and_milliseconds() {
+        assert_eq!(sync_date(1_700_000_000), "2023-11-14 22:13 UTC");
+        assert_eq!(sync_date(1_700_000_000_000), "2023-11-14 22:13 UTC");
     }
 
     #[test]
