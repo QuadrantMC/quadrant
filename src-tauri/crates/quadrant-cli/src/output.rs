@@ -70,6 +70,9 @@ impl Output {
         let task = (!self.quiet).then(|| {
             let drew = drew.clone();
             tokio::spawn(async move {
+                // Exports and modpack installs report completion twice: for
+                // the last file and once more when they finish.
+                let mut last_done = None;
                 loop {
                     match receiver.recv().await {
                         Ok(event) => {
@@ -79,8 +82,9 @@ impl Output {
                             if interactive {
                                 eprint!("\r{line}\x1b[K");
                                 drew.store(true, Ordering::Relaxed);
-                            } else if done {
+                            } else if done && last_done.as_ref() != Some(&line) {
                                 eprintln!("{line}");
+                                last_done = Some(line);
                             }
                         }
                         Err(RecvError::Lagged(_)) => {}
