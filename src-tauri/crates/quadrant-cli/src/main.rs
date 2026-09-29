@@ -46,6 +46,15 @@ struct Cli {
     /// Quadrant API base URL.
     #[arg(long, global = true, env = "QUADRANT_API_BASE_URL", value_name = "URL")]
     api_url: Option<String>,
+    /// OS keyring service the Quadrant ID login is kept under [default: the
+    /// desktop app's]
+    #[arg(
+        long,
+        global = true,
+        env = "QUADRANT_KEYRING_SERVICE",
+        value_name = "NAME"
+    )]
+    keyring_service: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -152,7 +161,7 @@ async fn run(cli: Cli) -> Result<()> {
         quiet: cli.quiet,
     };
     let ctx = Ctx {
-        host: build_host(cli.data_dir, cli.api_url)?,
+        host: build_host(cli.data_dir, cli.api_url, cli.keyring_service)?,
         out,
     };
     let report = dispatch(cli.command, &ctx).await?;
@@ -177,7 +186,11 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<Report> {
     }
 }
 
-fn build_host(data_dir: Option<PathBuf>, api_url: Option<String>) -> Result<QuadrantHost> {
+fn build_host(
+    data_dir: Option<PathBuf>,
+    api_url: Option<String>,
+    keyring_service: Option<String>,
+) -> Result<QuadrantHost> {
     let data_dir = match data_dir {
         Some(data_dir) => data_dir,
         None => dirs::data_dir()
@@ -191,6 +204,9 @@ fn build_host(data_dir: Option<PathBuf>, api_url: Option<String>) -> Result<Quad
         option_env!("QUADRANT_API_KEY").unwrap_or_default(),
     );
     options.api_base_url = api_url;
+    if let Some(keyring_service) = keyring_service {
+        options.keyring_service_name = keyring_service;
+    }
     let host = QuadrantHost::new(options)?;
     host.init_config()?;
     Ok(host)
