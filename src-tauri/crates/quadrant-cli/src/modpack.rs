@@ -514,14 +514,14 @@ async fn identify(ctx: &Ctx, name: &str) -> Result<Report> {
                     .iter()
                     .map(|candidate| {
                         format!(
-                            "  {} ({} {})\n    quadrant-cli modpack register {:?} --id {} --source {} --download-url {}",
+                            "  {} ({} {})\n    quadrant-cli modpack register {} --id {} --source {} --download-url {}",
                             candidate.name.as_deref().unwrap_or("unknown mod"),
                             args::source_name(&candidate.source),
                             candidate.id,
-                            name,
-                            candidate.id,
+                            shell_quote(name),
+                            shell_quote(&candidate.id),
                             args::source_name(&candidate.source),
-                            candidate.download_url
+                            shell_quote(&candidate.download_url)
                         )
                     })
                     .collect::<Vec<_>>()
@@ -546,6 +546,12 @@ pub async fn import(ctx: &Ctx, code: &str, name: Option<String>, yes: bool) -> R
     let _progress = ctx.out.track_progress(&ctx.host);
     ctx.host.install_modpack(modpack).await?;
     Ok(Report::message(format!("Installed {installed}.")))
+}
+
+/// Quotes an argument for a POSIX shell: single quotes keep everything
+/// literal, and an embedded `'` closes them, is escaped, and reopens them.
+fn shell_quote(arg: &str) -> String {
+    format!("'{}'", arg.replace('\'', r"'\''"))
 }
 
 /// Installing a modpack over a local one with the same name rewrites its mod
@@ -731,6 +737,13 @@ mod tests {
             ["Tech"]
         );
         assert_eq!(order_modpacks(packs, Some("")).len(), 2);
+    }
+
+    #[test]
+    fn shell_quoting_keeps_arguments_literal() {
+        assert_eq!(shell_quote("Bob's Pack"), r"'Bob'\''s Pack'");
+        assert_eq!(shell_quote(r#"$HOME `x` "y""#), r#"'$HOME `x` "y"'"#);
+        assert_eq!(shell_quote(""), "''");
     }
 
     #[test]
