@@ -1,6 +1,9 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::Subcommand;
 use quadrant_core::account::quadrant_settings_sync::SettingsPull;
 use serde_json::Value;
@@ -8,6 +11,8 @@ use serde_json::Value;
 use crate::{Ctx, config, output::Report};
 
 const COLLECT_USER_DATA: &str = "collectUserData";
+/// Settings naming a folder Quadrant reads and writes in.
+const FOLDER_KEYS: &[&str] = &["mcFolder", "prismLauncherFolder"];
 
 #[derive(Debug, Subcommand)]
 pub enum SettingsCommand {
@@ -55,7 +60,16 @@ pub async fn run(command: SettingsCommand, ctx: &Ctx) -> Result<Report> {
             Report::new(&value, display_value)
         }
         SettingsCommand::Set { key, value } => {
-            let value = config::parse_value(&key, &value, host.get_config_value(&key)?.as_ref());
+            if key == COLLECT_USER_DATA {
+                // Checked before the write, so a build that can't send or
+                // withdraw telemetry leaves the setting as it was.
+                ctx.require_api_key()?;
+            }
+            let value = if FOLDER_KEYS.contains(&key.as_str()) {
+                folder_value(&folder_setting(Path::new(&value))?)
+            } else {
+                config::parse_value(&key, &value, host.get_config_value(&key)?.as_ref())
+            };
             config::set(host, &key, value.clone())?;
             if key == COLLECT_USER_DATA {
                 // Settings.tsx sends or withdraws telemetry the moment the
@@ -82,14 +96,10 @@ pub async fn run(command: SettingsCommand, ctx: &Ctx) -> Result<Report> {
                         .ok_or_else(|| anyhow!("no default Minecraft folder on this system"))?,
                 )
             } else {
-                path.map(std::path::absolute).transpose()?
+                path.as_deref().map(folder_setting).transpose()?
             };
             if let Some(folder) = new_folder {
-                config::set(
-                    host,
-                    "mcFolder",
-                    Value::String(folder.to_string_lossy().to_string()),
-                )?;
+                config::set(host, "mcFolder", folder_value(&folder))?;
             }
             let folder = host.get_minecraft_folder()?;
             Report::new(&folder, |folder| folder.display().to_string())
@@ -115,11 +125,76 @@ pub async fn run(command: SettingsCommand, ctx: &Ctx) -> Result<Report> {
     }
 }
 
+/// A folder setting has to name a folder that exists. It is stored absolute,
+/// so it means the same whatever folder the app or the CLI runs from.
+fn folder_setting(raw: &Path) -> Result<PathBuf> {
+    if raw.to_string_lossy().trim().is_empty() {
+        bail!("the folder path is empty");
+    }
+    let folder = std::path::absolute(raw)?;
+    if !folder.is_dir() {
+        bail!("{} is not an existing folder", folder.display());
+    }
+    Ok(folder)
+}
+
+fn folder_value(folder: &Path) -> Value {
+    Value::String(folder.to_string_lossy().into_owned())
+}
+
 /// Strings print bare, everything else as compact JSON.
 fn display_value(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Null => "(unset)".to_string(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_settings_must_name_an_existing_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(folder_setting(dir.path()).unwrap(), dir.path());
+        assert!(folder_setting(Path::new(".")).unwrap().is_absolute());
+
+        let file = dir.path().join("file.txt");
+        std::fs::write(&file, "").unwrap();
+        for bad in [
+            Path::new(""),
+            Path::new("  "),
+            &file,
+            &dir.path().join("missing"),
+        ] {
+            assert!(folder_setting(bad).is_err(), "{}", bad.display());
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_user_data_stays_unchanged_without_an_api_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = quadrant_host::QuadrantHostOptions::new(dir.path().to_path_buf(), "", "", "");
+        let ctx = Ctx {
+            host: quadrant_host::QuadrantHost::new(options).unwrap(),
+            out: crate::output::Output {
+                json: false,
+                quiet: true,
+            },
+        };
+        let before = ctx.host.get_config_value(COLLECT_USER_DATA).unwrap();
+        let flipped = before.as_ref().and_then(Value::as_bool) != Some(true);
+        let set = SettingsCommand::Set {
+            key: COLLECT_USER_DATA.to_string(),
+            value: flipped.to_string(),
+        };
+        let error = run(set, &ctx).await.err().unwrap();
+        assert!(error.to_string().contains("QUADRANT_API_KEY"), "{error}");
+        assert_eq!(
+            ctx.host.get_config_value(COLLECT_USER_DATA).unwrap(),
+            before
+        );
     }
 }

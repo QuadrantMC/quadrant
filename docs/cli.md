@@ -130,7 +130,7 @@ quadrant-cli settings mc-folder [PATH | --reset]
 quadrant-cli settings push | pull
 ```
 
-`set` stores JSON literals (`true`, `100`, `{"a":1}`) as JSON and anything else as text. Keys that hold text, like `lastUsedVersion` or `mcFolder`, stay text even when the value looks like a number. Every change updates `lastSettingsUpdated`, as the app does, so settings sync treats it as the newest copy. Turning `collectUserData` on or off sends or withdraws telemetry right away, as the settings page does.
+`set` stores JSON literals (`true`, `100`, `{"a":1}`) as JSON and anything else as text. Keys that hold text, like `lastUsedVersion` or `mcFolder`, stay text even when the value looks like a number. Every change updates `lastSettingsUpdated`, as the app does, so settings sync treats it as the newest copy. Turning `collectUserData` on or off sends or withdraws telemetry right away, as the settings page does, so a build without `QUADRANT_API_KEY` refuses to change it. `mcFolder` and `prismLauncherFolder`, whether set with `set` or `mc-folder`, must name an existing folder and are stored as absolute paths.
 
 ### Links and everything else
 
