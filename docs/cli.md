@@ -4,6 +4,19 @@
 
 By default it works on the desktop app's data. Settings, modpacks and the Quadrant ID login are shared, so a modpack made in one shows up in the other.
 
+## Installing
+
+Every desktop package ships `quadrantmc` next to the app.
+
+| Package | How to run it |
+|---|---|
+| Debian/Ubuntu `.deb`, Fedora `.rpm`, AUR `quadrant-bin` | `quadrantmc`, installed to `/usr/bin/quadrantmc`. |
+| Flatpak | `flatpak run --command=quadrantmc dev.mrquantumoff.mcmodpackmanager`. It runs inside the sandbox and works on the Flatpak app's data. |
+| Windows installer | `quadrantmc`. The installer adds its install folder (`%LOCALAPPDATA%\Quadrant` by default) to your user `PATH`, so it works in terminals opened after installing. Uninstalling removes the entry. |
+| Microsoft Store | `quadrantmc`, an app execution alias. Windows lists it under Settings > Apps > Advanced app settings > App execution aliases. |
+| AppImage | Bundled at `usr/bin/quadrantmc` inside the image but not on `PATH`. Run `./Quadrant*.AppImage --appimage-extract` and call `squashfs-root/usr/bin/quadrantmc` by path. |
+| macOS | Bundled at `Quadrant.app/Contents/MacOS/quadrantmc` but not on `PATH`. Call it by that path or link it into a folder on your `PATH`. |
+
 ## Building
 
 From `src-tauri/`:
@@ -12,7 +25,9 @@ From `src-tauri/`:
 cargo build --release -p quadrant-cli
 ```
 
-The binary lands in `src-tauri/target/release/quadrantmc`. The default build includes CurseForge and needs `ETERNAL_API_TOKEN` set, like the app; `--no-default-features` leaves CurseForge out and builds without it. Quadrant ID, Sync, Share and telemetry use the app's other build-time credentials (`QUADRANT_OAUTH2_CLIENT_ID`, `QUADRANT_OAUTH2_CLIENT_SECRET`, `QUADRANT_API_KEY`). A build without them still works for everything else, and those commands name the missing variable.
+The crate is `quadrant-cli`; the binary lands in `src-tauri/target/release/quadrantmc`. The default build includes CurseForge and needs `ETERNAL_API_TOKEN` set, like the app; `--no-default-features` leaves CurseForge out and builds without it. Quadrant ID, Sync, Share and telemetry use the app's other build-time credentials (`QUADRANT_OAUTH2_CLIENT_ID`, `QUADRANT_OAUTH2_CLIENT_SECRET`, `QUADRANT_API_KEY`). A build without them still works for everything else, and those commands name the missing variable.
+
+Packaging builds bundle it as a Tauri sidecar. `bun run build:tauri` and the release workflows pass `--config src-tauri/tauri.cli.conf.json`, whose `beforeBuildCommand` runs `scripts/build-cli.ts`. That builds `quadrantmc` for the Tauri target and copies it to `src-tauri/binaries/quadrantmc-<target triple>[.exe]`, where `bundle.externalBin` picks it up. The config also adds the Windows installer hooks in `src-tauri/windows/` that manage `PATH`. The base `tauri.conf.json` leaves all of this out, because `tauri-build` fails when an `externalBin` file is missing, which would break `cargo test`, rust-analyzer and `tauri dev`.
 
 ## Global options
 
