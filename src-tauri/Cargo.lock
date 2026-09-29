@@ -4500,6 +4500,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+ "urlencoding",
 ]
 
 [[package]]

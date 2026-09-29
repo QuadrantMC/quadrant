@@ -162,7 +162,7 @@ pub async fn run(command: ModpackCommand, ctx: &Ctx) -> Result<Report> {
                             mod_.name.clone(),
                             mod_.id.clone(),
                             args::source_name(&mod_.source).to_string(),
-                            installed_version(&shown.modpack, &mod_.id),
+                            installed_file(&shown.modpack, &mod_.id),
                         ]
                     })
                     .collect::<Vec<_>>();
@@ -410,7 +410,7 @@ async fn updates(ctx: &Ctx, name: &str, apply: bool) -> Result<Report> {
                 };
                 [
                     update.name.clone(),
-                    installed_version(&modpack, &update.id),
+                    installed_file(&modpack, &update.id),
                     new_file,
                 ]
             })
@@ -533,19 +533,28 @@ fn installed_rows(mods: &[InstalledMod]) -> Vec<[String; 4]> {
                 mod_.name.clone(),
                 mod_.id.clone(),
                 args::source_name(&mod_.source).to_string(),
-                mod_.version.clone(),
+                file_name(&mod_.download_url),
             ]
         })
         .collect()
 }
 
-fn installed_version(modpack: &LocalModpack, id: &str) -> String {
+/// The file a modpack entry was installed from, which says more than the
+/// provider's version label (a date on CurseForge, an opaque id on Modrinth).
+fn installed_file(modpack: &LocalModpack, id: &str) -> String {
     modpack
         .mods
         .iter()
         .find(|mod_| mod_.id == id)
-        .map(|mod_| mod_.version.clone())
+        .map(|mod_| file_name(&mod_.download_url))
         .unwrap_or_default()
+}
+
+fn file_name(download_url: &str) -> String {
+    let encoded = download_url.rsplit('/').next().unwrap_or(download_url);
+    urlencoding::decode(encoded)
+        .map(|name| name.into_owned())
+        .unwrap_or_else(|_| encoded.to_string())
 }
 
 fn modpack_flags(modpack: &LocalModpack) -> String {
