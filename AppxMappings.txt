@@ -1,5 +1,6 @@
 [Files]
 "src-tauri\target\release\quadrant_next.exe" "quadrant_next.exe"
+"src-tauri\binaries\quadrantmc-x86_64-pc-windows-msvc.exe" "quadrantmc.exe"
 "src-tauri\icons\Square150x150Logo.png" "Images\Square150x150Logo.png"
 "src-tauri\icons\Square44x44Logo.png" "Images\Square44x44Logo.png"
 "src-tauri\icons\StoreLogo.png" "Images\StoreLogo.png"

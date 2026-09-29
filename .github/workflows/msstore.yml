@@ -69,13 +69,21 @@ jobs:
           QUADRANT_OAUTH2_CLIENT_SECRET: ${{ secrets.QUADRANT_OAUTH2_CLIENT_SECRET }}
         run: |
           rustup target add ${{ matrix.triple }}
-          bun tauri build --config src-tauri/tauri.msstore.conf.json --target ${{ matrix.triple }}
+          bun tauri build --config src-tauri/tauri.cli.conf.json --config src-tauri/tauri.msstore.conf.json --target ${{ matrix.triple }}
 
       - name: Upload built executable
         uses: actions/upload-artifact@v4
         with:
           name: exe-${{ matrix.arch }}
           path: src-tauri/target/${{ matrix.triple }}/release/quadrant_next.exe
+          if-no-files-found: error
+
+      # The quadrantmc sidecar scripts/build-cli.ts built during the Tauri build.
+      - name: Upload built CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.arch }}
+          path: src-tauri/binaries/quadrantmc-${{ matrix.triple }}.exe
           if-no-files-found: error
 
   # Fan-in: assemble the MSIX bundle from both arch executables and submit it.
@@ -102,21 +110,27 @@ jobs:
           pattern: exe-*
           path: artifacts
 
+      - name: Download built CLIs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: artifacts
+
       - name: Stage executables for bundling
         shell: pwsh
         run: |
-          $map = @{
-            "exe-x64"   = "src-tauri/target/x86_64-pc-windows-msvc/release"
-            "exe-arm64" = "src-tauri/target/aarch64-pc-windows-msvc/release"
-          }
-          foreach ($name in $map.Keys) {
-            $src = Join-Path "artifacts/$name" "quadrant_next.exe"
-            if (-not (Test-Path -Path $src -PathType Leaf)) {
-              throw "Missing artifact executable: $src"
+          $files = @(
+            @{ Src = "artifacts/exe-x64/quadrant_next.exe"; Dest = "src-tauri/target/x86_64-pc-windows-msvc/release/quadrant_next.exe" },
+            @{ Src = "artifacts/exe-arm64/quadrant_next.exe"; Dest = "src-tauri/target/aarch64-pc-windows-msvc/release/quadrant_next.exe" },
+            @{ Src = "artifacts/cli-x64/quadrantmc-x86_64-pc-windows-msvc.exe"; Dest = "src-tauri/binaries/quadrantmc-x86_64-pc-windows-msvc.exe" },
+            @{ Src = "artifacts/cli-arm64/quadrantmc-aarch64-pc-windows-msvc.exe"; Dest = "src-tauri/binaries/quadrantmc-aarch64-pc-windows-msvc.exe" }
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path -Path $file.Src -PathType Leaf)) {
+              throw "Missing artifact executable: $($file.Src)"
             }
-            $destDir = $map[$name]
-            New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-            Copy-Item -Path $src -Destination (Join-Path $destDir "quadrant_next.exe") -Force
+            New-Item -ItemType Directory -Path (Split-Path -Parent $file.Dest) -Force | Out-Null
+            Copy-Item -Path $file.Src -Destination $file.Dest -Force
           }
 
       - name: Build MSIX bundle
