@@ -41,7 +41,7 @@ quadrant-cli modpack edit NAME [--rename NEW] [--version V] [--loader L]
 quadrant-cli modpack delete NAME [--yes]
 quadrant-cli modpack apply NAME
 quadrant-cli modpack clear
-quadrant-cli modpack export NAME [-o PATH]
+quadrant-cli modpack export NAME [-o PATH] [--yes]
 quadrant-cli modpack updates NAME [--apply]
 quadrant-cli modpack identify NAME
 quadrant-cli modpack register NAME --id ID --source modrinth --download-url URL
@@ -50,7 +50,7 @@ quadrant-cli modpack import CODE_OR_LINK [--name NAME] [--yes]
 quadrant-cli modpack folder [--open]
 ```
 
-`list` orders modpacks as the app does: the applied one first, then the most recently synced. `create` defaults to the latest release. `clear` applies the empty `free` modpack, as the app's clear button does. `export` writes `./NAME.quadrantExport.zip` unless `-o` says otherwise. `updates` names every mod it couldn't look up or check, and exits with status 1 when there was one, after `--apply` has installed the updates it did find. `identify` matches files the modpack doesn't track and prints a `register` command for each candidate. `delete` asks first, and without a terminal to ask on it needs `--yes`. So does `import` when a local modpack already has the name it installs under, since installing over it deletes the files of its mods the imported copy lacks.
+`list` orders modpacks as the app does: the applied one first, then the most recently synced. `create` defaults to the latest release. `clear` applies the empty `free` modpack, as the app's clear button does. `export` writes `./NAME.quadrantExport.zip` unless `-o` says otherwise, and asks before overwriting a file that is already there. `updates` names every mod it couldn't look up or check, and exits with status 1 when there was one, after `--apply` has installed the updates it did find. `identify` matches files the modpack doesn't track and prints a `register` command for each candidate. `delete` asks first, and without a terminal to ask on it needs `--yes`. So does `import` when a local modpack already has the name it installs under, since installing over it deletes the files of its mods the imported copy lacks.
 
 ### Mods and packs
 

@@ -79,6 +79,9 @@ pub enum ModpackCommand {
         /// Archive path [default: ./<NAME>.quadrantExport.zip]
         #[arg(long, short)]
         output: Option<PathBuf>,
+        /// Overwrite an existing file at the archive path without asking.
+        #[arg(long, short)]
+        yes: bool,
     },
     /// List mods with a newer file for the modpack's version and loader.
     Updates {
@@ -228,11 +231,17 @@ pub async fn run(command: ModpackCommand, ctx: &Ctx) -> Result<Report> {
             apply(ctx, FREE_MODPACK)?;
             Ok(Report::message("Cleared the mods folder."))
         }
-        ModpackCommand::Export { name, output } => {
+        ModpackCommand::Export { name, output, yes } => {
             find_modpack(host, &name).await?;
             let destination = std::path::absolute(
                 output.unwrap_or_else(|| PathBuf::from(format!("{name}.quadrantExport.zip"))),
             )?;
+            if destination.exists() {
+                confirm(
+                    &format!("{} already exists. Overwrite it?", destination.display()),
+                    yes,
+                )?;
+            }
             if let Some(parent) = destination.parent() {
                 std::fs::create_dir_all(parent)?;
             }
