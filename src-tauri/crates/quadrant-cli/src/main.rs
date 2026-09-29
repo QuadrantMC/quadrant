@@ -7,6 +7,7 @@ mod i18n;
 mod misc;
 mod modpack;
 mod mods;
+mod notifications;
 mod oauth;
 mod output;
 mod prism;
@@ -84,6 +85,9 @@ enum Command {
     /// Link modpacks to Prism Launcher instances.
     #[command(subcommand)]
     Prism(prism::PrismCommand),
+    /// Read and answer Quadrant ID notifications.
+    #[command(subcommand)]
+    Notifications(notifications::NotificationsCommand),
     /// Read and change Quadrant settings.
     #[command(subcommand)]
     Settings(settings::SettingsCommand),
@@ -185,6 +189,7 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<Report> {
         Command::Mod(command) => mods::run(command, ctx).await,
         Command::Content(command) => content::run(command, ctx).await,
         Command::Prism(command) => prism::run(command, ctx).await,
+        Command::Notifications(command) => notifications::run(command, ctx).await,
         Command::Settings(command) => settings::run(command, ctx).await,
         Command::Telemetry(command) => misc::telemetry(command, ctx).await,
         Command::Invoke {
