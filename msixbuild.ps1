@@ -64,7 +64,29 @@ function New-StageDirectory {
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
 }
 
-function Get-ArchitectureExecutablePath {
+function Get-BuildOutputCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Architecture,
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$FileName
+    )
+
+    $candidatePaths = @(
+        (Join-Path $RepoRoot "src-tauri\target\$($Architecture.Triple)\release\$FileName")
+    )
+
+    # Cargo writes the host target to target\release when no explicit --target is supplied.
+    if ($Architecture.Name -eq "x64") {
+        $candidatePaths += Join-Path $RepoRoot "src-tauri\target\release\$FileName"
+    }
+
+    return $candidatePaths
+}
+
+function Get-CliCandidates {
     param(
         [Parameter(Mandatory = $true)]
         [hashtable]$Architecture,
@@ -72,16 +94,18 @@ function Get-ArchitectureExecutablePath {
         [string]$RepoRoot
     )
 
-    $candidatePaths = @(
-        (Join-Path $RepoRoot "src-tauri\target\$($Architecture.Triple)\release\quadrant_next.exe")
+    # scripts/build-cli.ts puts the Tauri sidecar in src-tauri\binaries.
+    return @(Join-Path $RepoRoot "src-tauri\binaries\quadrantmc-$($Architecture.Triple).exe") +
+        (Get-BuildOutputCandidates -Architecture $Architecture -RepoRoot $RepoRoot -FileName "quadrantmc.exe")
+}
+
+function Find-FirstFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Paths
     )
 
-    # Cargo writes the host target to target\release when no explicit --target is supplied.
-    if ($Architecture.Name -eq "x64") {
-        $candidatePaths += Join-Path $RepoRoot "src-tauri\target\release\quadrant_next.exe"
-    }
-
-    foreach ($candidatePath in $candidatePaths) {
+    foreach ($candidatePath in $Paths) {
         if (Test-Path -Path $candidatePath -PathType Leaf) {
             return $candidatePath
         }
@@ -126,9 +150,15 @@ New-Item -ItemType Directory -Path $bundleOutputPath -Force | Out-Null
 $stagedArchitectures = @()
 
 foreach ($architecture in $architectures) {
-    $sourceExe = Get-ArchitectureExecutablePath -Architecture $architecture -RepoRoot $repoRoot
-    if ($null -eq $sourceExe -or -not (Test-Path -Path $sourceExe -PathType Leaf)) {
+    $sourceExe = Find-FirstFile -Paths (Get-BuildOutputCandidates -Architecture $architecture -RepoRoot $repoRoot -FileName "quadrant_next.exe")
+    if ($null -eq $sourceExe) {
         continue
+    }
+
+    $cliCandidates = Get-CliCandidates -Architecture $architecture -RepoRoot $repoRoot
+    $sourceCli = Find-FirstFile -Paths $cliCandidates
+    if ($null -eq $sourceCli) {
+        throw "quadrantmc.exe was not found for $($architecture.Name). Expected one of:`n$($cliCandidates -join "`n")"
     }
 
     $stageDir = Join-Path $contentRootPath $architecture.Name
@@ -165,6 +195,7 @@ foreach ($architecture in $architectures) {
 
     Set-ManifestIdentity -ManifestPath $stageManifestPath -ProcessorArchitecture $architecture.ProcessorArchitecture -Version $manifestVersion
     Copy-Item -Path $sourceExe -Destination (Join-Path $stageDir "quadrant_next.exe") -Force
+    Copy-Item -Path $sourceCli -Destination (Join-Path $stageDir "quadrantmc.exe") -Force
 
     $stagedArchitectures += [pscustomobject]@{
         Name      = $architecture.Name
@@ -175,10 +206,8 @@ foreach ($architecture in $architectures) {
 
 if ($stagedArchitectures.Count -eq 0) {
     $expectedOutputs = $architectures | ForEach-Object {
-        Join-Path $repoRoot "src-tauri\target\$($_.Triple)\release\quadrant_next.exe"
+        Get-BuildOutputCandidates -Architecture $_ -RepoRoot $repoRoot -FileName "quadrant_next.exe"
     }
-
-    $expectedOutputs += Join-Path $repoRoot "src-tauri\target\release\quadrant_next.exe"
 
     throw "No architecture-specific executables were found. Expected at least one of:`n$($expectedOutputs -join "`n")"
 }

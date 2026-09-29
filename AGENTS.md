@@ -15,7 +15,7 @@
 | Renderer-only dev (Vite, browser) | `bun run dev` |
 | Tauri dev (full desktop app) | `bun run dev:tauri` |
 | Build shared renderer | `bun run build` (runs `tsc && vite build`) |
-| Build Tauri app | `bun run build:tauri` |
+| Build Tauri app | `bun run build:tauri` (merges `src-tauri/tauri.cli.conf.json`, which builds the `quadrantmc` CLI via `scripts/build-cli.ts` and bundles it as a sidecar; plain `bun tauri build` leaves it out) |
 | Lint | `bun run lint` (ESLint flat config, `eslint.config.js`) |
 | Tauri dev without proprietary features | `bun tauri dev -- -- --no-default-features` |
 | Ad-hoc macOS DMG (no Apple cert) | `bun run tauri:macos:adhoc:build` |

@@ -1,0 +1,33 @@
+[package]
+name = "quadrant-cli"
+version.workspace = true
+edition = "2024"
+description = "Command-line interface for Quadrant"
+
+[[bin]]
+name = "quadrantmc"
+path = "src/main.rs"
+
+[features]
+default = ["curseforge"]
+curseforge = ["quadrant-core/curseforge", "quadrant-host/curseforge"]
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+dirs = { workspace = true }
+futures = { workspace = true }
+getrandom = { workspace = true }
+hex = { workspace = true }
+open = { workspace = true }
+quadrant-core = { path = "../quadrant-core" }
+quadrant-host = { path = "../quadrant-host" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+urlencoding = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

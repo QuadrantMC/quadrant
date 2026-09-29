@@ -47,3 +47,6 @@ ds-bundle/
 .design-sync/quadrant-compiled.css
 .design-sync/Inter-Font.ttf
 .claude/
+
+# quadrantmc sidecar, built by scripts/build-cli.ts
+src-tauri/binaries/
