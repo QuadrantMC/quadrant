@@ -31,6 +31,12 @@ fn touch(host: &QuadrantHost, key: &str) -> Result<()> {
     )
 }
 
+pub fn get_string(host: &QuadrantHost, key: &str) -> Result<Option<String>> {
+    Ok(host
+        .get_config_value(key)?
+        .and_then(|value| value.as_str().map(str::to_string)))
+}
+
 /// Settings the app stores as text even when the text looks like JSON, such
 /// as a `1.21` version. Keys missing from a fresh config are listed too.
 const TEXT_KEYS: &[&str] = &[

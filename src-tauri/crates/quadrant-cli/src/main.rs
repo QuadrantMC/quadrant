@@ -4,8 +4,10 @@ mod deeplink;
 mod i18n;
 mod misc;
 mod modpack;
+mod mods;
 mod output;
 mod provider;
+mod search;
 mod settings;
 
 use std::{path::PathBuf, process::ExitCode};
@@ -55,6 +57,9 @@ enum Command {
     /// Create, apply, export and update modpacks.
     #[command(subcommand)]
     Modpack(modpack::ModpackCommand),
+    /// Search, inspect, install and update mods and packs.
+    #[command(name = "mod", subcommand)]
+    Mod(mods::ModCommand),
     /// Read and change Quadrant settings.
     #[command(subcommand)]
     Settings(settings::SettingsCommand),
@@ -151,6 +156,7 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<Report> {
         Command::Versions => misc::versions(ctx).await,
         Command::News => misc::news(ctx).await,
         Command::Modpack(command) => modpack::run(command, ctx).await,
+        Command::Mod(command) => mods::run(command, ctx).await,
         Command::Settings(command) => settings::run(command, ctx).await,
         Command::Telemetry(command) => misc::telemetry(command, ctx).await,
         Command::Invoke {
