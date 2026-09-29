@@ -19,7 +19,7 @@ mod sync;
 use std::{path::PathBuf, process::ExitCode};
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use quadrant_host::{QuadrantHost, QuadrantHostOptions};
 
 use crate::output::{Output, Report};
@@ -35,6 +35,15 @@ const APP_IDENTIFIER: &str = "dev.mrquantumoff.mcmodpackmanager";
     after_help = "Shares settings, modpacks and the Quadrant ID login with the desktop app."
 )]
 struct Cli {
+    #[command(flatten)]
+    global: GlobalArgs,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Args)]
+#[command(next_help_heading = "Global options")]
+struct GlobalArgs {
     /// Print the result as JSON on stdout.
     #[arg(long, global = true)]
     json: bool,
@@ -59,21 +68,10 @@ struct Cli {
         value_name = "NAME"
     )]
     keyring_service: Option<String>,
-    #[command(subcommand)]
-    command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Act on a mod, modpack or sign-in link like the desktop app does.
-    Open(deeplink::OpenArgs),
-    /// List the Minecraft release versions mods can target.
-    Versions,
-    /// Show the Quadrant news feed.
-    News,
-    /// Sign in to Quadrant ID and show the account.
-    #[command(subcommand)]
-    Account(account::AccountCommand),
     /// Create, apply, export and update modpacks.
     #[command(subcommand)]
     Modpack(modpack::ModpackCommand),
@@ -86,6 +84,9 @@ enum Command {
     /// Link modpacks to Prism Launcher instances.
     #[command(subcommand)]
     Prism(prism::PrismCommand),
+    /// Sign in to Quadrant ID and show the account.
+    #[command(subcommand)]
+    Account(account::AccountCommand),
     /// Read and answer Quadrant ID notifications.
     #[command(subcommand)]
     Notifications(notifications::NotificationsCommand),
@@ -95,6 +96,12 @@ enum Command {
     /// Read and change Quadrant settings.
     #[command(subcommand)]
     Settings(settings::SettingsCommand),
+    /// Act on a mod, modpack or sign-in link like the desktop app does.
+    Open(deeplink::OpenArgs),
+    /// List the Minecraft release versions mods can target.
+    Versions,
+    /// Show the Quadrant news feed.
+    News,
     /// Inspect or send usage telemetry.
     #[command(subcommand)]
     Telemetry(misc::TelemetryCommand),
@@ -139,7 +146,7 @@ impl Ctx {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    quiet_backend_logs(cli.verbose);
+    quiet_backend_logs(cli.global.verbose);
     let result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -171,12 +178,17 @@ fn quiet_backend_logs(verbose: u8) {
 }
 
 async fn run(cli: Cli) -> Result<()> {
-    let out = Output {
-        json: cli.json,
-        quiet: cli.quiet,
-    };
+    let GlobalArgs {
+        json,
+        quiet,
+        data_dir,
+        api_url,
+        keyring_service,
+        ..
+    } = cli.global;
+    let out = Output { json, quiet };
     let ctx = Ctx {
-        host: build_host(cli.data_dir, cli.api_url, cli.keyring_service)?,
+        host: build_host(data_dir, api_url, keyring_service)?,
         out,
     };
     let report = dispatch(cli.command, &ctx).await?;
@@ -185,17 +197,17 @@ async fn run(cli: Cli) -> Result<()> {
 
 async fn dispatch(command: Command, ctx: &Ctx) -> Result<Report> {
     match command {
-        Command::Open(link) => deeplink::open(link, ctx).await,
-        Command::Versions => misc::versions(ctx).await,
-        Command::News => misc::news(ctx).await,
-        Command::Account(command) => account::run(command, ctx).await,
         Command::Modpack(command) => modpack::run(command, ctx).await,
         Command::Mod(command) => mods::run(command, ctx).await,
         Command::Content(command) => content::run(command, ctx).await,
         Command::Prism(command) => prism::run(command, ctx).await,
+        Command::Account(command) => account::run(command, ctx).await,
         Command::Notifications(command) => notifications::run(command, ctx).await,
         Command::Sync(command) => sync::run(command, ctx).await,
         Command::Settings(command) => settings::run(command, ctx).await,
+        Command::Open(link) => deeplink::open(link, ctx).await,
+        Command::Versions => misc::versions(ctx).await,
+        Command::News => misc::news(ctx).await,
         Command::Telemetry(command) => misc::telemetry(command, ctx).await,
         Command::Invoke {
             command,
