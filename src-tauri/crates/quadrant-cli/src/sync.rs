@@ -110,7 +110,7 @@ pub async fn run(command: SyncCommand, ctx: &Ctx) -> Result<Report> {
             let local = find_modpack(host, &modpack).await?;
             match host.sync_modpack(local, force).await {
                 Err(error) if !force && is_cloud_sync_conflict(&error) => bail!(
-                    "The cloud copy of {modpack} is newer. Pull it with `sync pull`, or pass --force to overwrite it."
+                    "The cloud copy of {modpack} is newer. Pull it with `quadrantmc sync pull`, or pass --force to overwrite it."
                 ),
                 result => result?,
             }
@@ -194,7 +194,9 @@ async fn synced_modpack(ctx: &Ctx, modpack_id: &str, show_owners: bool) -> Resul
         .await?
         .into_iter()
         .find(|synced| synced.modpack_id == modpack_id)
-        .ok_or_else(|| anyhow!("no synced modpack {modpack_id}; `sync list` shows yours"))
+        .ok_or_else(|| {
+            anyhow!("no synced modpack {modpack_id}; `quadrantmc sync list` shows yours")
+        })
 }
 
 fn to_installed(synced: SyncedModpack, name: String) -> Result<InstalledModpack> {

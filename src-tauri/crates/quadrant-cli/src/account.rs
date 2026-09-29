@@ -93,7 +93,7 @@ async fn login(ctx: &Ctx, no_browser: bool) -> Result<Report> {
 
     let code = tokio::time::timeout(LOGIN_TIMEOUT, oauth::wait_for_callback(listener, &state))
         .await
-        .map_err(|_| anyhow!("the sign-in timed out; run `account login` again"))??;
+        .map_err(|_| anyhow!("the sign-in timed out; run `quadrantmc account login` again"))??;
     finish_login(ctx, code, redirect_uri).await
 }
 

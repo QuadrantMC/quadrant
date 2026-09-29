@@ -5,7 +5,7 @@ edition = "2024"
 description = "Command-line interface for Quadrant"
 
 [[bin]]
-name = "quadrant-cli"
+name = "quadrantmc"
 path = "src/main.rs"
 
 [features]

@@ -279,7 +279,9 @@ async fn search_mods(ctx: &Ctx, search: SearchArgs) -> Result<Report> {
                 search::find_category(&known, wanted)
                     .cloned()
                     .ok_or_else(|| {
-                        anyhow!("unknown category {wanted:?}; `mod categories` lists them")
+                        anyhow!(
+                            "unknown category {wanted:?}; `quadrantmc mod categories` lists them"
+                        )
                     })
             })
             .collect::<Result<Vec<_>>>()?

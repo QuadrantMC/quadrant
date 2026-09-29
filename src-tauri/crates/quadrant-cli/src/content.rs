@@ -20,7 +20,7 @@ pub enum ContentCommand {
     },
     /// Copy packs from one location to another, skipping ones already there.
     Copy {
-        /// Location id, as `content list` shows it.
+        /// Location id, as `quadrantmc content list` shows it.
         #[arg(long)]
         from: String,
         #[arg(long)]
@@ -128,7 +128,9 @@ fn file_names(locations: &[ContentLocation], id: &str, mod_type: ModType) -> Res
     let location = locations
         .iter()
         .find(|location| location.id == id)
-        .ok_or_else(|| anyhow!("no content location {id:?}; `content list` shows them"))?;
+        .ok_or_else(|| {
+            anyhow!("no content location {id:?}; `quadrantmc content list` shows them")
+        })?;
     let Some(section) = location
         .sections
         .iter()

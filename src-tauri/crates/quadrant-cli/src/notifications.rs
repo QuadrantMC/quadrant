@@ -177,7 +177,7 @@ fn describe(shown: &Shown) -> String {
     );
     if shown.invite.is_some() {
         text.push_str(&format!(
-            "\n`notifications accept {id}` or `notifications decline {id}`",
+            "\n`quadrantmc notifications accept {id}` or `quadrantmc notifications decline {id}`",
             id = shown.notification.notification_id
         ));
     }

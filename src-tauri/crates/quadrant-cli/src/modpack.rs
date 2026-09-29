@@ -514,7 +514,7 @@ async fn identify(ctx: &Ctx, name: &str) -> Result<Report> {
                     .iter()
                     .map(|candidate| {
                         format!(
-                            "  {} ({} {})\n    quadrant-cli modpack register {} --id {} --source {} --download-url {}",
+                            "  {} ({} {})\n    quadrantmc modpack register {} --id {} --source {} --download-url {}",
                             candidate.name.as_deref().unwrap_or("unknown mod"),
                             args::source_name(&candidate.source),
                             candidate.id,

@@ -18,7 +18,7 @@ pub enum PrismCommand {
     Detach { instance: String },
 }
 
-const DISABLED: &str = "Prism Launcher support is experimental; turn it on with `settings set experimentalFeatures true`.";
+const DISABLED: &str = "Prism Launcher support is experimental; turn it on with `quadrantmc settings set experimentalFeatures true`.";
 
 pub async fn run(command: PrismCommand, ctx: &Ctx) -> Result<Report> {
     let host = &ctx.host;

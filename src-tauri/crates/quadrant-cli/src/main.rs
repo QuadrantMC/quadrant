@@ -29,7 +29,7 @@ const APP_IDENTIFIER: &str = "dev.mrquantumoff.mcmodpackmanager";
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "quadrant-cli",
+    name = "quadrantmc",
     version,
     about = "Manage Minecraft mods and modpacks with Quadrant",
     after_help = "Shares settings, modpacks and the Quadrant ID login with the desktop app."

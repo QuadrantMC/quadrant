@@ -1,6 +1,6 @@
-# quadrant-cli
+# quadrantmc
 
-`quadrant-cli` does from a terminal what the desktop app does: modpacks, mod search and installs, resource and shader packs, Prism Launcher links, Quadrant ID, Sync, Share and settings. It is a thin layer over `quadrant-host`, the same backend the desktop app and the Node addon use.
+`quadrantmc` does from a terminal what the desktop app does: modpacks, mod search and installs, resource and shader packs, Prism Launcher links, Quadrant ID, Sync, Share and settings. It is a thin layer over `quadrant-host`, the same backend the desktop app and the Node addon use.
 
 By default it works on the desktop app's data. Settings, modpacks and the Quadrant ID login are shared, so a modpack made in one shows up in the other.
 
@@ -12,7 +12,7 @@ From `src-tauri/`:
 cargo build --release -p quadrant-cli
 ```
 
-The binary lands in `src-tauri/target/release/quadrant-cli`. The default build includes CurseForge and needs `ETERNAL_API_TOKEN` set, like the app; `--no-default-features` leaves CurseForge out and builds without it. Quadrant ID, Sync, Share and telemetry use the app's other build-time credentials (`QUADRANT_OAUTH2_CLIENT_ID`, `QUADRANT_OAUTH2_CLIENT_SECRET`, `QUADRANT_API_KEY`). A build without them still works for everything else, and those commands name the missing variable.
+The binary lands in `src-tauri/target/release/quadrantmc`. The default build includes CurseForge and needs `ETERNAL_API_TOKEN` set, like the app; `--no-default-features` leaves CurseForge out and builds without it. Quadrant ID, Sync, Share and telemetry use the app's other build-time credentials (`QUADRANT_OAUTH2_CLIENT_ID`, `QUADRANT_OAUTH2_CLIENT_SECRET`, `QUADRANT_API_KEY`). A build without them still works for everything else, and those commands name the missing variable.
 
 ## Global options
 
@@ -34,20 +34,20 @@ A sandbox that must not touch real data needs three things: `--data-dir` pointin
 ### Modpacks
 
 ```sh
-quadrant-cli modpack list [--query TEXT] [--include-free]
-quadrant-cli modpack show NAME [--no-details]
-quadrant-cli modpack create NAME --loader fabric [--version 1.21.1]
-quadrant-cli modpack edit NAME [--rename NEW] [--version V] [--loader L]
-quadrant-cli modpack delete NAME [--yes]
-quadrant-cli modpack apply NAME
-quadrant-cli modpack clear
-quadrant-cli modpack export NAME [-o PATH] [--yes]
-quadrant-cli modpack updates NAME [--apply]
-quadrant-cli modpack identify NAME
-quadrant-cli modpack register NAME --id ID --source modrinth --download-url URL
-quadrant-cli modpack share NAME
-quadrant-cli modpack import CODE_OR_LINK [--name NAME] [--yes]
-quadrant-cli modpack folder [--open]
+quadrantmc modpack list [--query TEXT] [--include-free]
+quadrantmc modpack show NAME [--no-details]
+quadrantmc modpack create NAME --loader fabric [--version 1.21.1]
+quadrantmc modpack edit NAME [--rename NEW] [--version V] [--loader L]
+quadrantmc modpack delete NAME [--yes]
+quadrantmc modpack apply NAME
+quadrantmc modpack clear
+quadrantmc modpack export NAME [-o PATH] [--yes]
+quadrantmc modpack updates NAME [--apply]
+quadrantmc modpack identify NAME
+quadrantmc modpack register NAME --id ID --source modrinth --download-url URL
+quadrantmc modpack share NAME
+quadrantmc modpack import CODE_OR_LINK [--name NAME] [--yes]
+quadrantmc modpack folder [--open]
 ```
 
 `list` orders modpacks as the app does: the applied one first, then the most recently synced. `create` defaults to the latest release. `clear` applies the empty `free` modpack, as the app's clear button does. `export` writes `./NAME.quadrantExport.zip` unless `-o` says otherwise, and asks before overwriting a file that is already there. `updates` names every mod it couldn't look up or check, and exits with status 1 when there was one, after `--apply` has installed the updates it did find. `identify` matches files the modpack doesn't track and prints a `register` command for each candidate. `delete` asks first, and without a terminal to ask on it needs `--yes`. So does `import` when a local modpack already has the name it installs under, since installing over it deletes the files of its mods the imported copy lacks.
@@ -55,17 +55,17 @@ quadrant-cli modpack folder [--open]
 ### Mods and packs
 
 ```sh
-quadrant-cli mod search [QUERY] [--source cf|mr]... [--type mod|resourcepack|shaderpack|modpack|datapack]
-                        [--version V] [--loader L] [--category C]... [--open-source]
-                        [--sort relevance|downloads|name|updated] [--offset N] [--limit N] [--modpack NAME]
-quadrant-cli mod info ID --source S
-quadrant-cli mod deps ID --source S
-quadrant-cli mod owners ID --source S
-quadrant-cli mod install ID --source S [--modpack NAME] [--version V] [--loader L]
-                        [--file-id F] [--location LOC] [--with-deps]
-quadrant-cli mod remove MODPACK ID
-quadrant-cli mod update MODPACK ID
-quadrant-cli mod categories [--source S] [--type T]
+quadrantmc mod search [QUERY] [--source cf|mr]... [--type mod|resourcepack|shaderpack|modpack|datapack]
+                      [--version V] [--loader L] [--category C]... [--open-source]
+                      [--sort relevance|downloads|name|updated] [--offset N] [--limit N] [--modpack NAME]
+quadrantmc mod info ID --source S
+quadrantmc mod deps ID --source S
+quadrantmc mod owners ID --source S
+quadrantmc mod install ID --source S [--modpack NAME] [--version V] [--loader L]
+                      [--file-id F] [--location LOC] [--with-deps]
+quadrantmc mod remove MODPACK ID
+quadrantmc mod update MODPACK ID
+quadrantmc mod categories [--source S] [--type T]
 ```
 
 `search` queries the providers enabled in settings, or only the ones named with `--source`. Results merge the way the search page merges them. Relevance interleaves each provider's ranking; the other sorts sort the union. A category only one provider has limits the search to that provider, `--open-source` limits it to Modrinth, and a loader only Modrinth supports does the same. `--modpack` makes that modpack's version and loader the defaults.
@@ -77,15 +77,15 @@ Loaders: `fabric`, `forge`, `neoforge`, `quilt`, `liteloader`, `babric`, `bta-ba
 ### Installed content and Prism Launcher
 
 ```sh
-quadrant-cli content list [--no-files]
-quadrant-cli content copy --from LOC --to LOC --type resourcepack|shaderpack (FILE... | --all)
-quadrant-cli content delete --location LOC --type T FILE... [--yes]
-quadrant-cli content folder --location LOC --type T [--open]
+quadrantmc content list [--no-files]
+quadrantmc content copy --from LOC --to LOC --type resourcepack|shaderpack (FILE... | --all)
+quadrantmc content delete --location LOC --type T FILE... [--yes]
+quadrantmc content folder --location LOC --type T [--open]
 
-quadrant-cli prism list
-quadrant-cli prism plan MODPACK
-quadrant-cli prism apply MODPACK INSTANCE
-quadrant-cli prism detach INSTANCE
+quadrantmc prism list
+quadrantmc prism plan MODPACK
+quadrantmc prism apply MODPACK INSTANCE
+quadrantmc prism detach INSTANCE
 ```
 
 Locations are `minecraft` or `prism:<instance>`. Prism support is experimental in the app too; turn it on with `settings set experimentalFeatures true`.
@@ -93,24 +93,24 @@ Locations are `minecraft` or `prism:<instance>`. Prism support is experimental i
 ### Quadrant ID, notifications and Sync
 
 ```sh
-quadrant-cli account login [--no-browser]
-quadrant-cli account logout
-quadrant-cli account info
-quadrant-cli account open | register
+quadrantmc account login [--no-browser]
+quadrantmc account logout
+quadrantmc account info
+quadrantmc account open | register
 
-quadrant-cli notifications list [--all]
-quadrant-cli notifications read ID
-quadrant-cli notifications accept ID | decline ID
-quadrant-cli notifications watch
+quadrantmc notifications list [--all]
+quadrantmc notifications read ID
+quadrantmc notifications accept ID | decline ID
+quadrantmc notifications watch
 
-quadrant-cli sync list
-quadrant-cli sync push MODPACK [--force]
-quadrant-cli sync pull MODPACK_ID [--name NAME] [--yes]
-quadrant-cli sync members MODPACK_ID
-quadrant-cli sync invite MODPACK_ID USERNAME [--admin]
-quadrant-cli sync kick MODPACK_ID USERNAME
-quadrant-cli sync delete MODPACK_ID [--yes]
-quadrant-cli sync share MODPACK_ID
+quadrantmc sync list
+quadrantmc sync push MODPACK [--force]
+quadrantmc sync pull MODPACK_ID [--name NAME] [--yes]
+quadrantmc sync members MODPACK_ID
+quadrantmc sync invite MODPACK_ID USERNAME [--admin]
+quadrantmc sync kick MODPACK_ID USERNAME
+quadrantmc sync delete MODPACK_ID [--yes]
+quadrantmc sync share MODPACK_ID
 ```
 
 `account login` signs in the way the app does. It opens the browser and prints the link, then waits up to five minutes for the redirect on the first free port of `127.0.0.1:4000` to `4005`. The login lands in the OS keyring, so the desktop app is signed in too, and `account logout` signs both out.
@@ -122,12 +122,12 @@ quadrant-cli sync share MODPACK_ID
 ### Settings
 
 ```sh
-quadrant-cli settings list
-quadrant-cli settings get KEY
-quadrant-cli settings set KEY VALUE
-quadrant-cli settings unset KEY
-quadrant-cli settings mc-folder [PATH | --reset]
-quadrant-cli settings push | pull
+quadrantmc settings list
+quadrantmc settings get KEY
+quadrantmc settings set KEY VALUE
+quadrantmc settings unset KEY
+quadrantmc settings mc-folder [PATH | --reset]
+quadrantmc settings push | pull
 ```
 
 `set` stores JSON literals (`true`, `100`, `{"a":1}`) as JSON and anything else as text. Keys that hold text, like `lastUsedVersion` or `mcFolder`, stay text even when the value looks like a number. Every change updates `lastSettingsUpdated`, as the app does, so settings sync treats it as the newest copy. Turning `collectUserData` on or off sends or withdraws telemetry right away, as the settings page does, so a build without `QUADRANT_API_KEY` refuses to change it. `mcFolder` and `prismLauncherFolder`, whether set with `set` or `mc-folder`, must name an existing folder and are stored as absolute paths.
@@ -135,12 +135,12 @@ quadrant-cli settings push | pull
 ### Links and everything else
 
 ```sh
-quadrant-cli open LINK [--modpack NAME] [--version V] [--loader L] [--name NAME] [--yes]
-quadrant-cli versions
-quadrant-cli news
-quadrant-cli telemetry info | send | remove
-quadrant-cli invoke --list
-quadrant-cli invoke COMMAND [JSON]
+quadrantmc open LINK [--modpack NAME] [--version V] [--loader L] [--name NAME] [--yes]
+quadrantmc versions
+quadrantmc news
+quadrantmc telemetry info | send | remove
+quadrantmc invoke --list
+quadrantmc invoke COMMAND [JSON]
 ```
 
 `open` takes the links the app registers for: `curseforge://install?addonId=…`, `modrinth://mod/<id>` (also `resourcepack`, `shader`, and wrapped `modrinth://https://modrinth.com/mod/<id>` links), `quadrantnext://modrinth|curseforge|modpack|login…`, and `https://usequadrant.dev/modpack/<code>`. Mod links install like `mod install`, modpack links import like `modpack import`, and login links finish a sign-in started by `account login`.
@@ -148,19 +148,19 @@ quadrant-cli invoke COMMAND [JSON]
 `invoke` calls a host command directly with a camelCase JSON payload, for anything the other commands don't cover:
 
 ```sh
-quadrant-cli invoke get_config_value '{"key":"mcFolder"}'
+quadrantmc invoke get_config_value '{"key":"mcFolder"}'
 ```
 
 ## Examples
 
 ```sh
-quadrant-cli modpack create "Survival" --loader fabric --version 1.21.1
-quadrant-cli mod search sodium --modpack Survival --limit 5
-quadrant-cli mod install AANobbMI --source modrinth --modpack Survival
-quadrant-cli mod install 238222 --source curseforge --modpack Survival
-quadrant-cli modpack updates Survival --apply
-quadrant-cli modpack apply Survival
-quadrant-cli --json modpack list | jq '.[].name'
+quadrantmc modpack create "Survival" --loader fabric --version 1.21.1
+quadrantmc mod search sodium --modpack Survival --limit 5
+quadrantmc mod install AANobbMI --source modrinth --modpack Survival
+quadrantmc mod install 238222 --source curseforge --modpack Survival
+quadrantmc modpack updates Survival --apply
+quadrantmc modpack apply Survival
+quadrantmc --json modpack list | jq '.[].name'
 ```
 
 ## Not in the CLI

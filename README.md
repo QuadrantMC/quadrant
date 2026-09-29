@@ -42,7 +42,7 @@
 
 - Collaborating on modpacks with your friends
 
-- All of the above from a terminal with `quadrant-cli`, see [docs/cli.md](docs/cli.md)
+- All of the above from a terminal with `quadrantmc`, see [docs/cli.md](docs/cli.md)
 
 > [!WARNING]
 >
