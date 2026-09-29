@@ -7,17 +7,19 @@ use std::{
     },
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Error, Result, bail};
 use quadrant_host::{HostEventEnvelope, QuadrantHost};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
 
 /// What a command produced: the value `--json` prints and the text a person
-/// reads otherwise.
+/// reads otherwise, plus the failure a command that partly succeeded still
+/// exits with once that is printed.
 pub struct Report {
     json: Value,
     human: String,
+    failure: Option<Error>,
 }
 
 impl Report {
@@ -25,6 +27,7 @@ impl Report {
         Ok(Self {
             json: serde_json::to_value(value)?,
             human: human(value),
+            failure: None,
         })
     }
 
@@ -33,7 +36,13 @@ impl Report {
         Self {
             json: Value::Null,
             human: text.into(),
+            failure: None,
         }
+    }
+
+    /// Prints the result, then fails the command with `failure` if there is one.
+    pub fn failing_with(self, failure: Option<Error>) -> Self {
+        Self { failure, ..self }
     }
 }
 
@@ -51,7 +60,10 @@ impl Output {
         } else if !report.human.trim().is_empty() {
             writeln!(stdout, "{}", report.human.trim_end())?;
         }
-        Ok(())
+        match report.failure {
+            Some(failure) => Err(failure),
+            None => Ok(()),
+        }
     }
 
     /// A side remark on stderr, so it never mixes into `--json` output.
@@ -59,6 +71,12 @@ impl Output {
         if !self.quiet {
             eprintln!("{text}");
         }
+    }
+
+    /// Something that failed while the command carried on. Unlike a note it
+    /// shows under `--quiet`, since it is an error, not chatter.
+    pub fn warn(&self, text: impl Display) {
+        eprintln!("{text}");
     }
 
     /// Renders the host's progress events on stderr until the returned guard
@@ -238,6 +256,21 @@ mod tests {
             progress_line(&event("refreshNotifications", json!([]))),
             None
         );
+    }
+
+    #[test]
+    fn a_partly_failed_report_prints_then_fails() {
+        let out = Output {
+            json: false,
+            quiet: true,
+        };
+        let report =
+            Report::message("").failing_with(Some(anyhow::anyhow!("couldn't check 1 mod")));
+        assert_eq!(
+            out.print(report).unwrap_err().to_string(),
+            "couldn't check 1 mod"
+        );
+        assert!(out.print(Report::message("")).is_ok());
     }
 
     #[test]

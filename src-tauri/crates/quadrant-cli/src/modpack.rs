@@ -150,7 +150,7 @@ pub async fn run(command: ModpackCommand, ctx: &Ctx) -> Result<Report> {
                     describe_modpack(modpack, &installed_rows(&modpack.mods))
                 });
             }
-            let mut mods = lookup_mods(ctx, &modpack).await;
+            let (mut mods, _) = lookup_mods(ctx, &modpack).await;
             mods.sort_by_key(|mod_| std::cmp::Reverse(mod_.download_count));
             let shown = ModpackWithMods { modpack, mods };
             Report::new(&shown, |shown| {
@@ -338,8 +338,9 @@ fn apply(ctx: &Ctx, name: &str) -> Result<()> {
 }
 
 /// Looks every mod of the modpack up on its provider, dropping the ones that
-/// can't be found, as `ModpackView` does.
-async fn lookup_mods(ctx: &Ctx, modpack: &LocalModpack) -> Vec<Mod> {
+/// can't be found, as `ModpackView` does, but naming them on stderr. Returns
+/// the mods found and the ones that weren't.
+async fn lookup_mods(ctx: &Ctx, modpack: &LocalModpack) -> (Vec<Mod>, Vec<String>) {
     let lookups = modpack.mods.iter().map(|mod_| {
         provider::get_mod(
             &ctx.host,
@@ -348,24 +349,32 @@ async fn lookup_mods(ctx: &Ctx, modpack: &LocalModpack) -> Vec<Mod> {
         )
     });
     let mut mods = Vec::new();
+    let mut failed = Vec::new();
     for (installed, result) in modpack.mods.iter().zip(join_all(lookups).await) {
         match result {
             Ok(mod_) => mods.push(mod_),
-            Err(error) => ctx.out.note(format!(
-                "Couldn't look up {} ({}): {}",
-                installed.name,
-                installed.id,
-                crate::i18n::describe(error)
-            )),
+            Err(error) => {
+                let label = format!("{} ({})", installed.name, installed.id);
+                ctx.out.warn(format!(
+                    "Couldn't look up {label}: {}",
+                    crate::i18n::describe(error)
+                ));
+                failed.push(label);
+            }
         }
     }
-    mods
+    (mods, failed)
 }
 
 async fn updates(ctx: &Ctx, name: &str, apply: bool) -> Result<Report> {
     let host = &ctx.host;
     let modpack = find_modpack(host, name).await?;
-    let checks = lookup_mods(ctx, &modpack).await.into_iter().map(|mod_| {
+    let (mods, mut failed) = lookup_mods(ctx, &modpack).await;
+    let labels: Vec<String> = mods
+        .iter()
+        .map(|mod_| format!("{} ({})", mod_.name, mod_.id))
+        .collect();
+    let checks = mods.into_iter().map(|mod_| {
         host.check_mod_updates(
             mod_,
             modpack.version.clone(),
@@ -374,14 +383,17 @@ async fn updates(ctx: &Ctx, name: &str, apply: bool) -> Result<Report> {
         )
     });
     let mut updates = Vec::new();
-    for result in join_all(checks).await {
+    for (label, result) in labels.into_iter().zip(join_all(checks).await) {
         match result {
             Ok(Some(update)) => updates.push(update),
             Ok(None) => {}
-            Err(error) => ctx.out.note(format!(
-                "Couldn't check a mod for updates: {}",
-                crate::i18n::describe(error)
-            )),
+            Err(error) => {
+                ctx.out.warn(format!(
+                    "Couldn't check {label} for updates: {}",
+                    crate::i18n::describe(error)
+                ));
+                failed.push(label);
+            }
         }
     }
 
@@ -402,7 +414,15 @@ async fn updates(ctx: &Ctx, name: &str, apply: bool) -> Result<Report> {
         }
     }
 
-    Report::new(&updates, |updates| {
+    let failure = (!failed.is_empty()).then(|| {
+        anyhow!(
+            "couldn't check {}: {}",
+            mod_count(failed.len()),
+            failed.join(", ")
+        )
+    });
+    let some_failed = failure.is_some();
+    Ok(Report::new(&updates, |updates| {
         let rows: Vec<[String; 3]> = updates
             .iter()
             .map(|update| {
@@ -418,12 +438,15 @@ async fn updates(ctx: &Ctx, name: &str, apply: bool) -> Result<Report> {
                 ]
             })
             .collect();
-        if rows.is_empty() {
-            "Every mod is up to date.".to_string()
-        } else {
+        if !rows.is_empty() {
             table(&rows)
+        } else if some_failed {
+            "No updates for the mods that could be checked.".to_string()
+        } else {
+            "Every mod is up to date.".to_string()
         }
-    })
+    })?
+    .failing_with(failure))
 }
 
 async fn identify(ctx: &Ctx, name: &str) -> Result<Report> {

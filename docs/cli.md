@@ -19,7 +19,7 @@ The binary lands in `src-tauri/target/release/quadrant-cli`. The default build i
 | Option | Meaning |
 |---|---|
 | `--json` | Print the result as JSON on stdout. Progress and notes stay on stderr. |
-| `-q`, `--quiet` | Hide progress and notes. |
+| `-q`, `--quiet` | Hide progress and notes. Warnings about part of a command failing still show. |
 | `-v`, `--verbose` | Show backend logs on stderr. Repeat for more detail. `RUST_LOG` overrides it. |
 | `--data-dir DIR` | Use another data folder instead of the desktop app's (`<data dir>/dev.mrquantumoff.mcmodpackmanager`). |
 | `--api-url URL` | Quadrant API base URL. Also read from `QUADRANT_API_BASE_URL`. |
@@ -50,7 +50,7 @@ quadrant-cli modpack import CODE_OR_LINK [--name NAME]
 quadrant-cli modpack folder [--open]
 ```
 
-`list` orders modpacks as the app does: the applied one first, then the most recently synced. `create` defaults to the latest release. `clear` applies the empty `free` modpack, as the app's clear button does. `export` writes `./NAME.quadrantExport.zip` unless `-o` says otherwise. `identify` matches files the modpack doesn't track and prints a `register` command for each candidate. `delete` asks first, and without a terminal to ask on it needs `--yes`.
+`list` orders modpacks as the app does: the applied one first, then the most recently synced. `create` defaults to the latest release. `clear` applies the empty `free` modpack, as the app's clear button does. `export` writes `./NAME.quadrantExport.zip` unless `-o` says otherwise. `updates` names every mod it couldn't look up or check, and exits with status 1 when there was one, after `--apply` has installed the updates it did find. `identify` matches files the modpack doesn't track and prints a `register` command for each candidate. `delete` asks first, and without a terminal to ask on it needs `--yes`.
 
 ### Mods and packs
 

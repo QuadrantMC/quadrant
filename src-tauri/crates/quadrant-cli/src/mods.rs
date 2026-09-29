@@ -317,7 +317,7 @@ async fn search_mods(ctx: &Ctx, search: SearchArgs) -> Result<Report> {
             Err(error) => {
                 if first_error.is_some() || !lists.is_empty() {
                     ctx.out
-                        .note(format!("A provider failed: {}", i18n::describe(error)));
+                        .warn(format!("A provider failed: {}", i18n::describe(error)));
                 } else {
                     first_error = Some(error);
                 }
@@ -329,7 +329,7 @@ async fn search_mods(ctx: &Ctx, search: SearchArgs) -> Result<Report> {
     }
     if let Some(error) = first_error {
         ctx.out
-            .note(format!("A provider failed: {}", i18n::describe(error)));
+            .warn(format!("A provider failed: {}", i18n::describe(error)));
     }
 
     let mut results = search::order_results(lists, search.sort);

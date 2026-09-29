@@ -47,7 +47,7 @@ struct GlobalArgs {
     /// Print the result as JSON on stdout.
     #[arg(long, global = true)]
     json: bool,
-    /// Hide progress and notes on stderr.
+    /// Hide progress and notes on stderr; warnings still show.
     #[arg(long, short, global = true)]
     quiet: bool,
     /// Show backend logs on stderr; repeat for more detail.
