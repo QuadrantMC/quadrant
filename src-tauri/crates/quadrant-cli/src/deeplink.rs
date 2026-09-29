@@ -25,6 +25,10 @@ pub struct OpenArgs {
     /// For modpack links: install under a different name.
     #[arg(long)]
     name: Option<String>,
+    /// For modpack links: replace a local modpack with the same name without
+    /// asking.
+    #[arg(long, short)]
+    yes: bool,
 }
 
 pub async fn open(link: OpenArgs, ctx: &Ctx) -> Result<Report> {
@@ -51,7 +55,7 @@ pub async fn open(link: OpenArgs, ctx: &Ctx) -> Result<Report> {
             )
             .await
         }
-        DeepLink::ImportModpack { code } => modpack::import(ctx, &code, link.name).await,
+        DeepLink::ImportModpack { code } => modpack::import(ctx, &code, link.name, link.yes).await,
         DeepLink::OauthLogin {
             state,
             code,

@@ -6,7 +6,7 @@ use futures::future::join_all;
 use quadrant_core::{
     error::ErrorCode,
     mc_mod::{GetModArgs, Mod},
-    models::{InstalledMod, LocalModpack, ModLoader, ModSource},
+    models::{InstalledMod, LocalModpack, ModLoader, ModSource, modpack_path},
 };
 use quadrant_host::QuadrantHost;
 use serde::Serialize;
@@ -109,6 +109,9 @@ pub enum ModpackCommand {
         /// Install under a different name.
         #[arg(long)]
         name: Option<String>,
+        /// Replace a local modpack with the same name without asking.
+        #[arg(long, short)]
+        yes: bool,
     },
     /// Print the modpacks folder.
     Folder {
@@ -267,7 +270,7 @@ pub async fn run(command: ModpackCommand, ctx: &Ctx) -> Result<Report> {
                 format!("{}\n{} uses left", shared.url, shared.uses_left)
             })
         }
-        ModpackCommand::Import { code, name } => import(ctx, &code, name).await,
+        ModpackCommand::Import { code, name, yes } => import(ctx, &code, name, yes).await,
         ModpackCommand::Folder { open } => {
             let folder = host.get_modpacks_folder()?;
             if open {
@@ -521,7 +524,7 @@ async fn identify(ctx: &Ctx, name: &str) -> Result<Report> {
     })
 }
 
-pub async fn import(ctx: &Ctx, code: &str, name: Option<String>) -> Result<Report> {
+pub async fn import(ctx: &Ctx, code: &str, name: Option<String>, yes: bool) -> Result<Report> {
     let code = deeplink::parse_share_code(code)
         .ok_or_else(|| anyhow!("expected a 7-digit share code or a {SHARE_URL}<code> link"))?;
     ctx.require_api_key()?;
@@ -530,9 +533,24 @@ pub async fn import(ctx: &Ctx, code: &str, name: Option<String>) -> Result<Repor
         modpack.name = valid_name(&name)?;
     }
     let installed = modpack.name.clone();
+    confirm_replace(&ctx.host, &installed, yes)?;
     let _progress = ctx.out.track_progress(&ctx.host);
     ctx.host.install_modpack(modpack).await?;
     Ok(Report::message(format!("Installed {installed}.")))
+}
+
+/// Installing a modpack over a local one with the same name rewrites its mod
+/// list and deletes the files of its mods the new list lacks, so it asks
+/// first. The folder decides, since that is what gets overwritten, whatever
+/// case the file system matches names in.
+pub fn confirm_replace(host: &QuadrantHost, name: &str, yes: bool) -> Result<()> {
+    if modpack_path(&host.get_minecraft_folder()?, name).exists() {
+        confirm(
+            &format!("Replace the local modpack {name}? Its mods the new copy lacks are deleted."),
+            yes,
+        )?;
+    }
+    Ok(())
 }
 
 fn describe_modpack<const N: usize>(modpack: &LocalModpack, rows: &[[String; N]]) -> String {

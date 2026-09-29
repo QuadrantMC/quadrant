@@ -46,11 +46,11 @@ quadrant-cli modpack updates NAME [--apply]
 quadrant-cli modpack identify NAME
 quadrant-cli modpack register NAME --id ID --source modrinth --download-url URL
 quadrant-cli modpack share NAME
-quadrant-cli modpack import CODE_OR_LINK [--name NAME]
+quadrant-cli modpack import CODE_OR_LINK [--name NAME] [--yes]
 quadrant-cli modpack folder [--open]
 ```
 
-`list` orders modpacks as the app does: the applied one first, then the most recently synced. `create` defaults to the latest release. `clear` applies the empty `free` modpack, as the app's clear button does. `export` writes `./NAME.quadrantExport.zip` unless `-o` says otherwise. `updates` names every mod it couldn't look up or check, and exits with status 1 when there was one, after `--apply` has installed the updates it did find. `identify` matches files the modpack doesn't track and prints a `register` command for each candidate. `delete` asks first, and without a terminal to ask on it needs `--yes`.
+`list` orders modpacks as the app does: the applied one first, then the most recently synced. `create` defaults to the latest release. `clear` applies the empty `free` modpack, as the app's clear button does. `export` writes `./NAME.quadrantExport.zip` unless `-o` says otherwise. `updates` names every mod it couldn't look up or check, and exits with status 1 when there was one, after `--apply` has installed the updates it did find. `identify` matches files the modpack doesn't track and prints a `register` command for each candidate. `delete` asks first, and without a terminal to ask on it needs `--yes`. So does `import` when a local modpack already has the name it installs under, since installing over it deletes the files of its mods the imported copy lacks.
 
 ### Mods and packs
 
@@ -105,7 +105,7 @@ quadrant-cli notifications watch
 
 quadrant-cli sync list
 quadrant-cli sync push MODPACK [--force]
-quadrant-cli sync pull MODPACK_ID [--name NAME]
+quadrant-cli sync pull MODPACK_ID [--name NAME] [--yes]
 quadrant-cli sync members MODPACK_ID
 quadrant-cli sync invite MODPACK_ID USERNAME [--admin]
 quadrant-cli sync kick MODPACK_ID USERNAME
@@ -117,7 +117,7 @@ quadrant-cli sync share MODPACK_ID
 
 `notifications list` hides what the app hides: modpack update notices when they are turned off, and ones for updates you made yourself. `--all` shows them. `notifications watch` prints new notifications until Ctrl+C, one JSON object per line under `--json`. It does so by running the desktop app's background workers, which change state, not only read it. Settings sync may pull the cloud settings over the local ones or push the local ones. When `autoQuadrantSync` is on, modpacks with a remote update get it applied. The notification cursor, which the desktop app shares, moves forward.
 
-`sync push` refuses to overwrite a newer cloud copy unless `--force` is passed. `sync pull` installs the cloud copy under the name of the local modpack it is linked to.
+`sync push` refuses to overwrite a newer cloud copy unless `--force` is passed. `sync pull` installs the cloud copy under the name of the local modpack it is linked to, and like `modpack import` it asks before replacing a local modpack.
 
 ### Settings
 
@@ -135,7 +135,7 @@ quadrant-cli settings push | pull
 ### Links and everything else
 
 ```sh
-quadrant-cli open LINK [--modpack NAME] [--version V] [--loader L] [--name NAME]
+quadrant-cli open LINK [--modpack NAME] [--version V] [--loader L] [--name NAME] [--yes]
 quadrant-cli versions
 quadrant-cli news
 quadrant-cli telemetry info | send | remove

@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::{
     Ctx,
-    modpack::{SHARE_URL, find_modpack},
+    modpack::{SHARE_URL, confirm_replace, find_modpack},
     output::{Report, confirm, sync_date, table},
 };
 
@@ -31,6 +31,9 @@ pub enum SyncCommand {
         /// the cloud name]
         #[arg(long)]
         name: Option<String>,
+        /// Replace the local modpack with that name without asking.
+        #[arg(long, short)]
+        yes: bool,
     },
     /// List who can see and edit a synced modpack.
     Members { modpack_id: String },
@@ -113,7 +116,11 @@ pub async fn run(command: SyncCommand, ctx: &Ctx) -> Result<Report> {
             }
             Ok(Report::message(format!("Pushed {modpack}.")))
         }
-        SyncCommand::Pull { modpack_id, name } => {
+        SyncCommand::Pull {
+            modpack_id,
+            name,
+            yes,
+        } => {
             let synced = synced_modpack(ctx, &modpack_id, false).await?;
             let name = match name {
                 Some(name) => name,
@@ -121,6 +128,7 @@ pub async fn run(command: SyncCommand, ctx: &Ctx) -> Result<Report> {
                     .map(|local| local.name.clone())
                     .unwrap_or_else(|| synced.name.clone()),
             };
+            confirm_replace(host, &name, yes)?;
             let last_synced = u64::try_from(synced.last_synced).unwrap_or_default();
             let modpack = to_installed(synced, name.clone())?;
             let _progress = ctx.out.track_progress(host);
