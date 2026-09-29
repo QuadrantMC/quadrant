@@ -42,6 +42,8 @@
 
 - Collaborating on modpacks with your friends
 
+- All of the above from a terminal with `quadrant-cli`, see [docs/cli.md](docs/cli.md)
+
 > [!WARNING]
 >
 > #### If app fails to apply your modpacks after installation, delete your mods folder.
