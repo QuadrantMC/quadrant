@@ -14,6 +14,7 @@ mod prism;
 mod provider;
 mod search;
 mod settings;
+mod sync;
 
 use std::{path::PathBuf, process::ExitCode};
 
@@ -88,6 +89,9 @@ enum Command {
     /// Read and answer Quadrant ID notifications.
     #[command(subcommand)]
     Notifications(notifications::NotificationsCommand),
+    /// Back modpacks up to Quadrant Sync and collaborate on them.
+    #[command(subcommand)]
+    Sync(sync::SyncCommand),
     /// Read and change Quadrant settings.
     #[command(subcommand)]
     Settings(settings::SettingsCommand),
@@ -190,6 +194,7 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<Report> {
         Command::Content(command) => content::run(command, ctx).await,
         Command::Prism(command) => prism::run(command, ctx).await,
         Command::Notifications(command) => notifications::run(command, ctx).await,
+        Command::Sync(command) => sync::run(command, ctx).await,
         Command::Settings(command) => settings::run(command, ctx).await,
         Command::Telemetry(command) => misc::telemetry(command, ctx).await,
         Command::Invoke {
