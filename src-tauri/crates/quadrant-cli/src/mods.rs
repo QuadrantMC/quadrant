@@ -369,16 +369,17 @@ pub async fn install(ctx: &Ctx, request: InstallArgs) -> Result<Report> {
         loader: config::get_string(host, LAST_USED_LOADER)?,
         modpack: config::get_string(host, LAST_USED_MODPACK)?,
     };
-    let defaults = resolve_install_targets(
-        mod_.mod_type,
-        request.modpack.as_deref(),
-        &saved,
-        &modpacks,
-        &versions,
-    )?;
-    let version = request.version.clone().unwrap_or(defaults.version);
-    let loader = request.loader.unwrap_or(defaults.loader);
-    let modpack = defaults.modpack.map(|modpack| modpack.name.clone());
+    let requested = Requested {
+        modpack: request.modpack.as_deref(),
+        version: request.version.as_deref(),
+        loader: request.loader,
+    };
+    let InstallTargets {
+        modpack,
+        version,
+        loader,
+    } = resolve_install_targets(mod_.mod_type, &requested, &saved, &modpacks, &versions)?;
+    let modpack = modpack.map(|modpack| modpack.name.clone());
     if version.is_empty() {
         bail!("no Minecraft version to install for; pass --version");
     }
@@ -395,6 +396,13 @@ pub async fn install(ctx: &Ctx, request: InstallArgs) -> Result<Report> {
         warn_if_installed(ctx, &mod_, modpack);
     }
 
+    ctx.out.note(match (&modpack, mod_.mod_type) {
+        (Some(modpack), ModType::Mod) => {
+            format!("Installing into {modpack} ({version}, {loader}).")
+        }
+        (Some(modpack), _) => format!("Installing into {modpack} ({version})."),
+        (None, _) => format!("Installing for Minecraft {version}."),
+    });
     let _progress = ctx.out.track_progress(host);
     host.install_mod(
         mod_.id.clone(),
@@ -603,6 +611,14 @@ pub struct SavedChoices {
     pub modpack: Option<String>,
 }
 
+/// What the command line named.
+#[derive(Debug, Default)]
+pub struct Requested<'a> {
+    pub modpack: Option<&'a str>,
+    pub version: Option<&'a str>,
+    pub loader: Option<ModLoader>,
+}
+
 #[derive(Debug)]
 pub struct InstallTargets<'a> {
     pub modpack: Option<&'a LocalModpack>,
@@ -610,19 +626,21 @@ pub struct InstallTargets<'a> {
     pub loader: ModLoader,
 }
 
-/// The modpack, version and loader the install page opens with
-/// (`ModInstallPage.tsx`). A mod goes into the named modpack, else the last
-/// used, the applied or the first one; a pack only into a named modpack.
-/// Saved choices only count while they still exist.
+/// The modpack, version and loader to install for, starting from what the
+/// install page opens with (`ModInstallPage.tsx`). A mod goes into the named
+/// modpack, else the last used, the applied or the first one; a pack only
+/// into a named modpack. Version and loader come from the command line, else
+/// the target modpack, so a file never lands in a modpack it can't run in,
+/// else the saved choices while they are still valid.
 pub fn resolve_install_targets<'a>(
     mod_type: ModType,
-    explicit: Option<&str>,
+    requested: &Requested,
     saved: &SavedChoices,
     modpacks: &'a [LocalModpack],
     versions: &[String],
 ) -> Result<InstallTargets<'a>> {
     let named = |name: &str| modpacks.iter().find(|modpack| modpack.name == name);
-    let explicit_target = match explicit {
+    let explicit_target = match requested.modpack {
         Some(name) => Some(named(name).ok_or(ErrorCode::ModpackMissing)?),
         None => None,
     };
@@ -635,26 +653,27 @@ pub fn resolve_install_targets<'a>(
         explicit_target
     };
 
-    let wanted_version = explicit_target
-        .map(|modpack| modpack.version.as_str())
-        .or(saved.version.as_deref());
-    let version = wanted_version
-        .filter(|wanted| versions.iter().any(|version| version == wanted))
+    let saved_version = saved
+        .version
+        .as_deref()
+        .filter(|wanted| versions.iter().any(|version| version == wanted));
+    let version = requested
+        .version
+        .or_else(|| target.map(|modpack| modpack.version.as_str()))
+        .or(saved_version)
         .map(str::to_string)
-        .or_else(|| target.map(|modpack| modpack.version.clone()))
         .or_else(|| versions.first().cloned())
         .unwrap_or_default();
 
-    let loader = explicit_target
-        .map(|modpack| modpack.mod_loader)
-        .or_else(|| {
-            saved
-                .loader
-                .as_deref()
-                .filter(|loader| !loader.is_empty())
-                .map(|loader| ModLoader::from(loader.to_string()))
-        })
+    let saved_loader = saved
+        .loader
+        .as_deref()
+        .filter(|loader| !loader.is_empty())
+        .map(|loader| ModLoader::from(loader.to_string()));
+    let loader = requested
+        .loader
         .or_else(|| target.map(|modpack| modpack.mod_loader))
+        .or(saved_loader)
         .unwrap_or(ModLoader::Unknown);
 
     Ok(InstallTargets {
@@ -718,6 +737,17 @@ mod tests {
         ["1.21", "1.20.1"].map(str::to_string).to_vec()
     }
 
+    fn named(modpack: &str) -> Requested<'_> {
+        Requested {
+            modpack: Some(modpack),
+            ..Requested::default()
+        }
+    }
+
+    fn pack_name<'a>(targets: &InstallTargets<'a>) -> Option<&'a str> {
+        targets.modpack.map(|pack| pack.name.as_str())
+    }
+
     #[test]
     fn a_named_modpack_decides_everything() {
         let packs = [
@@ -730,10 +760,52 @@ mod tests {
             modpack: Some("a".to_string()),
         };
         let targets =
-            resolve_install_targets(ModType::Mod, Some("b"), &saved, &packs, &versions()).unwrap();
-        assert_eq!(targets.modpack.map(|pack| pack.name.as_str()), Some("b"));
+            resolve_install_targets(ModType::Mod, &named("b"), &saved, &packs, &versions())
+                .unwrap();
+        assert_eq!(pack_name(&targets), Some("b"));
         assert_eq!(targets.version, "1.21");
         assert_eq!(targets.loader, ModLoader::Fabric);
+    }
+
+    #[test]
+    fn a_modpack_picked_by_default_still_beats_saved_choices() {
+        let packs = [modpack("fab", "1.20.1", ModLoader::Fabric, false)];
+        let saved = SavedChoices {
+            version: Some("1.21".to_string()),
+            loader: Some("Forge".to_string()),
+            modpack: Some("fab".to_string()),
+        };
+        let targets = resolve_install_targets(
+            ModType::Mod,
+            &Requested::default(),
+            &saved,
+            &packs,
+            &versions(),
+        )
+        .unwrap();
+        assert_eq!(pack_name(&targets), Some("fab"));
+        assert_eq!(targets.version, "1.20.1");
+        assert_eq!(targets.loader, ModLoader::Fabric);
+    }
+
+    #[test]
+    fn the_command_line_beats_the_modpack() {
+        let packs = [modpack("fab", "1.20.1", ModLoader::Fabric, true)];
+        let requested = Requested {
+            modpack: Some("fab"),
+            version: Some("1.21"),
+            loader: Some(ModLoader::Quilt),
+        };
+        let targets = resolve_install_targets(
+            ModType::Mod,
+            &requested,
+            &SavedChoices::default(),
+            &packs,
+            &versions(),
+        )
+        .unwrap();
+        assert_eq!(targets.version, "1.21");
+        assert_eq!(targets.loader, ModLoader::Quilt);
     }
 
     #[test]
@@ -743,30 +815,22 @@ mod tests {
             modpack("applied", "1.21", ModLoader::Fabric, true),
         ];
         let none = SavedChoices::default();
+        let nothing = Requested::default();
         let targets =
-            resolve_install_targets(ModType::Mod, None, &none, &packs, &versions()).unwrap();
-        assert_eq!(
-            targets.modpack.map(|pack| pack.name.as_str()),
-            Some("applied")
-        );
+            resolve_install_targets(ModType::Mod, &nothing, &none, &packs, &versions()).unwrap();
+        assert_eq!(pack_name(&targets), Some("applied"));
         assert_eq!(targets.version, "1.21");
         assert_eq!(targets.loader, ModLoader::Fabric);
 
         let saved = SavedChoices {
             modpack: Some("first".to_string()),
-            version: Some("9.9".to_string()),
-            loader: None,
+            ..SavedChoices::default()
         };
         let targets =
-            resolve_install_targets(ModType::Mod, None, &saved, &packs, &versions()).unwrap();
-        assert_eq!(
-            targets.modpack.map(|pack| pack.name.as_str()),
-            Some("first")
-        );
-        assert_eq!(
-            targets.version, "1.20.1",
-            "an unavailable saved version is dropped"
-        );
+            resolve_install_targets(ModType::Mod, &nothing, &saved, &packs, &versions()).unwrap();
+        assert_eq!(pack_name(&targets), Some("first"));
+        assert_eq!(targets.version, "1.20.1");
+        assert_eq!(targets.loader, ModLoader::Forge);
 
         let only = [modpack("only", "1.20.1", ModLoader::Quilt, false)];
         let gone = SavedChoices {
@@ -774,30 +838,45 @@ mod tests {
             ..SavedChoices::default()
         };
         let targets =
-            resolve_install_targets(ModType::Mod, None, &gone, &only, &versions()).unwrap();
-        assert_eq!(targets.modpack.map(|pack| pack.name.as_str()), Some("only"));
+            resolve_install_targets(ModType::Mod, &nothing, &gone, &only, &versions()).unwrap();
+        assert_eq!(pack_name(&targets), Some("only"));
     }
 
     #[test]
-    fn packs_only_follow_a_named_modpack() {
+    fn packs_without_a_modpack_use_saved_choices_then_the_latest_release() {
         let packs = [modpack("applied", "1.20.1", ModLoader::Fabric, true)];
+        let nothing = Requested::default();
         let saved = SavedChoices {
+            version: Some("1.20.1".to_string()),
             loader: Some("Forge".to_string()),
             ..SavedChoices::default()
         };
         let targets =
-            resolve_install_targets(ModType::ShaderPack, None, &saved, &packs, &versions())
+            resolve_install_targets(ModType::ShaderPack, &nothing, &saved, &packs, &versions())
                 .unwrap();
         assert!(targets.modpack.is_none());
-        assert_eq!(targets.version, "1.21");
+        assert_eq!(targets.version, "1.20.1");
         assert_eq!(targets.loader, ModLoader::Forge);
+
+        let stale = SavedChoices {
+            version: Some("9.9".to_string()),
+            ..SavedChoices::default()
+        };
+        let targets =
+            resolve_install_targets(ModType::ShaderPack, &nothing, &stale, &packs, &versions())
+                .unwrap();
+        assert_eq!(
+            targets.version, "1.21",
+            "an unavailable saved version is dropped"
+        );
+        assert_eq!(targets.loader, ModLoader::Unknown);
     }
 
     #[test]
     fn a_missing_named_modpack_is_an_error() {
         let error = resolve_install_targets(
             ModType::Mod,
-            Some("nope"),
+            &named("nope"),
             &SavedChoices::default(),
             &[],
             &versions(),
