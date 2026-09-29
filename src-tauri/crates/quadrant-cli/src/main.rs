@@ -1,3 +1,4 @@
+mod account;
 mod args;
 mod config;
 mod content;
@@ -6,6 +7,7 @@ mod i18n;
 mod misc;
 mod modpack;
 mod mods;
+mod oauth;
 mod output;
 mod prism;
 mod provider;
@@ -65,6 +67,9 @@ enum Command {
     Versions,
     /// Show the Quadrant news feed.
     News,
+    /// Sign in to Quadrant ID and show the account.
+    #[command(subcommand)]
+    Account(account::AccountCommand),
     /// Create, apply, export and update modpacks.
     #[command(subcommand)]
     Modpack(modpack::ModpackCommand),
@@ -172,6 +177,7 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<Report> {
     match command {
         Command::Versions => misc::versions(ctx).await,
         Command::News => misc::news(ctx).await,
+        Command::Account(command) => account::run(command, ctx).await,
         Command::Modpack(command) => modpack::run(command, ctx).await,
         Command::Mod(command) => mods::run(command, ctx).await,
         Command::Content(command) => content::run(command, ctx).await,
