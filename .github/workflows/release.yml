@@ -121,7 +121,8 @@ jobs:
           releaseBody: "See the assets to download this version and install. Check out the [changelog on my blog](https://blog.mrquantumoff.dev)"
           releaseDraft: false
           prerelease: ${{ !endsWith(github.ref_name, 'stable') }}
-          args: ${{ matrix.args }}
+          # tauri.cli.conf.json builds quadrantmc and bundles it as a sidecar.
+          args: --config src-tauri/tauri.cli.conf.json ${{ matrix.args }}
           tauriScript: "bun tauri"
           tagName: ${{github.ref_name}}
 

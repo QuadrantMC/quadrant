@@ -50,6 +50,7 @@ jobs:
             native:
               - 'src-tauri/**'
               - 'package.json'
+              - 'scripts/build-cli.ts'
               - 'bun.lock'
               - 'vite.config.ts'
               - 'tsconfig*.json'
@@ -193,9 +194,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/next' }}
 
       # No separate renderer build: `tauri build` runs `beforeBuildCommand`
-      # (`bun run build`) itself, so building it here first ran tsc + vite twice.
+      # itself, so building it here first ran tsc + vite twice. The merged
+      # config's `beforeBuildCommand` also builds the quadrantmc sidecar, which
+      # the release packages bundle.
       - name: Build Tauri shell
-        run: bun tauri build --no-bundle
+        run: bun tauri build --no-bundle --config src-tauri/tauri.cli.conf.json
 
   validate-macos:
     needs: changes
