@@ -49,6 +49,12 @@
 
   <releases>
 
+    <release date="2026-10-01" version="26.10.1-preview.0" type="development">
+      <description>
+        <p>Added quadrantmc, a command-line client that can do everything the app does and is installed alongside it</p>
+      </description>
+    </release>
+
     <release date="2026-09-26" version="26.10.0">
       <description>
         <p>As a part of the experimental features, you can now apply modpacks to Prism Launcher instances</p>
