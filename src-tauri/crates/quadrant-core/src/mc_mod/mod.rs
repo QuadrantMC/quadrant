@@ -286,7 +286,7 @@ pub struct IdentifiedMod {
 /// Returns the default Quadrant user agent used for upstream requests.
 pub fn get_user_agent() -> String {
     format!(
-        "mrquantumoff/quadrant/v{} (mrquantumoff.dev) (QUADRANT NEXT/TAURI)",
+        "QuadrantMC/quadrant/v{} (usequadrant.dev) (QUADRANT NEXT/TAURI)",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -1397,7 +1397,7 @@ mod tests {
     #[test]
     fn get_user_agent_embeds_crate_version() {
         let agent = get_user_agent();
-        assert!(agent.starts_with("mrquantumoff/quadrant/v"));
+        assert!(agent.starts_with("QuadrantMC/quadrant/v"));
         assert!(agent.contains(env!("CARGO_PKG_VERSION")));
     }
 
