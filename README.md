@@ -1,14 +1,41 @@
 <!-- @format -->
 
-# Quadrant for Minecraft
+<p align="center">
+  <img src="public/logoNoBg.svg" alt="Quadrant logo" width="128" height="128"/>
+</p>
 
-> An easy way to manage your modpacks, written in React and Rust.
+<h1 align="center">Quadrant for Minecraft</h1>
 
-### Installation guide:
+<p align="center">
+  Manage your Minecraft: Java Edition mods, modpacks, resource packs and shaders with ease.
+  <br/>
+  Built with Tauri, React and Rust.
+</p>
 
-##### The app is available on these stores:
+<p align="center">
+  <a href="https://usequadrant.dev">Website</a> ·
+  <a href="https://github.com/QuadrantMC/quadrant/releases/latest">Latest release</a> ·
+  <a href="docs/cli.md">CLI docs</a> ·
+  <a href="https://github.com/QuadrantMC/quadrant/issues">Report a bug</a> ·
+  <a href="https://status.bultek.com.ua/status/main">Service status</a>
+</p>
 
-##### Read the warnings before installation!
+<p align="center">
+  <img src="Screenshots/1.png" alt="Quadrant's modpack list" width="800"/>
+</p>
+
+## Features
+
+- **Modpacks**: create, apply, clear, import and export modpacks for Forge, Fabric and other loaders.
+- **Search and install**: browse mods, resource packs and shaders from Modrinth and CurseForge, with dependencies installed alongside.
+- **Updates**: update the mods in a modpack from Modrinth and CurseForge.
+- **Installed content**: view, copy and delete the resource packs and shaders in your Minecraft folder.
+- **Quadrant ID**: share modpacks with friends via Quadrant Share, back them up and collaborate on them with Quadrant Sync, and sync your settings across devices.
+- **Prism Launcher** (experimental): apply modpacks to Prism Launcher instances.
+- **`quadrantmc` CLI**: everything above from a terminal, installed alongside the app. See [docs/cli.md](docs/cli.md).
+- Available in English, Turkish and Ukrainian.
+
+## Installation
 
 <table align="center">
   <tr>
@@ -18,52 +45,46 @@
   </tr>
 </table>
 
-#### OR
-
-[Grab the latest build manually (Linux/Windows on x86_64/aarch64, or macOS on Apple Silicon)](https://github.com/QuadrantMC/quadrant/releases/latest)
-
-### Working features
-
-- Applying modpacks
-
-- Clearing modpacks
-
-- Installing mods and resourcepacks (not modpacks) from curseforge/modrinth
-
-- Installing shaders from modrinth and curseforge
-
-- Importing and exporting modpacks
-
-- Updating mods from curseforge and modrinth
-
-- Sharing modpacks with your friends
-
-- Backing up modpacks to the cloud
-
-- Collaborating on modpacks with your friends
-
-- All of the above from a terminal with `quadrantmc`, see [docs/cli.md](docs/cli.md)
-
-> [!WARNING]
->
-> #### If app fails to apply your modpacks after installation, delete your mods folder.
->
-> #### The app relies on time being synced correctly on your machine. If you encounter issues with features like Quadrant ID / Quadrant Share / Quadrant Sync, make sure that your time is set correctly. If that doesn't help, check the [status](https://status.bultek.com.ua/status/main) page
+You can also [download a build manually](https://github.com/QuadrantMC/quadrant/releases/latest) for Linux and Windows (x86_64/aarch64) or macOS (Apple Silicon).
 
 > [!NOTE]
 >
-> macOS users must approve the app in Privacy & Security before first launch.
-> macOS users must also let the app use the key chain with the "Always allow" button in order to have Quadrant ID/Sync functionality.
+> On macOS, approve the app in **Privacy & Security** before the first launch, and choose **Always allow** when it asks to use the keychain. Quadrant ID and Sync need keychain access.
 
-> [!TIP]
->
-> ##### If some of the app's functionality doesn't work properly on Windows, try enabling developer mode in the system settings and/or reinstalling the app from microsoft store.
+## Screenshots
 
-> [!WARNING]
->
-> #### Before requesting to the delete the data collected by the app, please be sure that you are using the latest version.
+<table>
+  <tr>
+    <td><img src="Screenshots/2.png" alt="Searching for shaders on Modrinth and CurseForge"/></td>
+    <td><img src="Screenshots/4.png" alt="Installing a mod into a modpack"/></td>
+  </tr>
+  <tr>
+    <td align="center">Search Modrinth and CurseForge</td>
+    <td align="center">Install mods with their dependencies</td>
+  </tr>
+  <tr>
+    <td><img src="Screenshots/3.png" alt="Managing installed resource packs and shaders"/></td>
+    <td><img src="Screenshots/1.png" alt="Modpacks synced with Quadrant Sync"/></td>
+  </tr>
+  <tr>
+    <td align="center">Manage installed resource packs and shaders</td>
+    <td align="center">Apply, share and sync modpacks</td>
+  </tr>
+</table>
 
-> [!WARNING]
->
-> The datacenter in Ukraine that was hosting the update server, API and everything else Quadrant-related got hit by a ru\**ian drone. Until further notice Quadrant ID and related services remain unavailable as I'm a broke teenager who cannot afford to host another VPS for the time being (plus all of the backups and data are still there). Afaik the cooling system is the issue and the data there remains intact. Слава Україні and fuck putin and ru\**ia.
-> ### Update: We moved Quadrant IDs servers to Türkiye, Quadrant's website, API and etc should be back up now.
+## Troubleshooting
+
+- **A modpack fails to apply right after installing Quadrant**: delete your `mods` folder and try again.
+- **Quadrant ID, Share or Sync don't work**: make sure your system clock is synced, then check the [status page](https://status.bultek.com.ua/status/main).
+- **Something doesn't work on Windows**: try enabling developer mode in system settings, or reinstall the app from the Microsoft Store.
+- **Requesting deletion of your data**: update to the latest version first. See the [privacy policy](PRIVACY_POLICY.md) for what the app collects.
+
+## Development
+
+See [DEVELOP.md](DEVELOP.md) to set up and build the app, and [TESTING.md](TESTING.md) for running the tests. The backend lives in a Tauri-independent Rust crate, documented in [docs/quadrant-core.md](docs/quadrant-core.md).
+
+## License
+
+Quadrant is licensed under the [Mozilla Public License 2.0](LICENSE). Using Quadrant ID is subject to the [Quadrant ID terms of service](QUADRANT-ID-TOS.md).
+
+Quadrant and its developer are not affiliated with Mojang Studios or Microsoft.
