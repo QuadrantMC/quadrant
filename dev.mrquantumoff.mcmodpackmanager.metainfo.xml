@@ -57,12 +57,6 @@
       </description>
     </release>
 
-    <release date="2026-10-01" version="26.10.1-preview.0" type="development">
-      <description>
-        <p>Added quadrantmc, a command-line client that can do everything the app does and is installed alongside it</p>
-      </description>
-    </release>
-
     <release date="2026-09-26" version="26.10.0">
       <description>
         <p>As a part of the experimental features, you can now apply modpacks to Prism Launcher instances</p>
@@ -71,27 +65,6 @@
         <p>Settings sync now starts working for accounts that have never synced settings before</p>
         <p>Faster Quadrant Sync and account requests</p>
         <p>Bug fixes and internal improvements</p>
-      </description>
-    </release>
-
-    <release date="2026-09-20" version="26.9.1-preview.2" type="development">
-      <description>
-        <p>Quadrant Sync now warns before overwriting a newer cloud copy and keeps renamed modpacks linked to their cloud version</p>
-        <p>Settings sync now starts working for accounts that have never synced settings before</p>
-        <p>Faster Quadrant Sync and account requests</p>
-      </description>
-    </release>
-
-    <release date="2026-09-19" version="26.9.1-preview.1" type="development">
-      <description>
-        <p>As a part of the experimental features, you can now apply modpacks to Prism Launcher instances</p>
-        <p>Added a page to view, copy and delete installed resource packs and shaders</p>
-      </description>
-    </release>
-
-    <release date="2026-09-06" version="26.9.1-preview.0" type="development">
-      <description>
-        <p>Fixes from a source audit of the renderer, mod installation, account handling, and host settings</p>
       </description>
     </release>
 
@@ -406,111 +379,6 @@
       </description>
     </release>
 
-    <release date="2025-01-22" version="25.1.0-preview.14">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-21" version="25.1.0-preview.13">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-20" version="25.1.0-preview.12">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-20" version="25.1.0-preview.11">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-18" version="25.1.0-preview.10">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-18" version="25.1.0-preview.9">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-18" version="25.1.0-preview.8">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-17" version="25.1.0-preview.7">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-17" version="25.1.0-preview.6">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-17" version="25.1.0-preview.5">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-
-    <release date="2025-01-17" version="25.1.0-preview.4">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-17" version="25.1.0-preview.3">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-17" version="25.1.0-preview.2">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-17" version="25.1.0-preview.1">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2025-01-17" version="25.1.0-preview.0">
-      <url type="details">https://blog.mrquantumoff.dev</url>
-      <description>
-        <p>App rewrite, new UI, improved performance, bug fixes</p>
-      </description>
-    </release>
 
     <release date="2024-12-10" version="24.12.1">
       <url type="details">https://blog.mrquantumoff.dev/quadrants-v24-12/</url>
@@ -726,30 +594,6 @@
     </release>
 
     <release date="2024-05-01" version="24.5.1">
-      <description>
-        <p>Introducing Quadrant ID</p>
-        <p>The privacy policy has been updated!</p>
-        <p>Dependency updates, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2024-04-22" version="24.5.0-preview3">
-      <description>
-        <p>Introducing Quadrant ID</p>
-        <p>The privacy policy has been updated!</p>
-        <p>Dependency updates, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2024-04-20" version="24.5.0-preview2">
-      <description>
-        <p>Introducing Quadrant ID</p>
-        <p>The privacy policy has been updated!</p>
-        <p>Dependency updates, bug fixes</p>
-      </description>
-    </release>
-
-    <release date="2024-04-20" version="24.5.0-preview">
       <description>
         <p>Introducing Quadrant ID</p>
         <p>The privacy policy has been updated!</p>
