@@ -40,6 +40,7 @@
             Id="quadrant"
             Executable="quadrant_next.exe"
             EntryPoint="Windows.FullTrustApplication"
+            desktop4:SupportsMultipleInstances="true"
         >
             <uap:VisualElements
                 BackgroundColor="transparent"
@@ -49,15 +50,15 @@
                 Description="Manage your modpacks and mods with ease."
             />
             <Extensions>
-                <uap3:Extension
+                <uap5:Extension
                     Category="windows.appExecutionAlias"
-                    Executable="quadrant_next.exe"
+                    Executable="quadrantmc.exe"
                     EntryPoint="Windows.FullTrustApplication"
                 >
-                    <uap3:AppExecutionAlias>
-                        <desktop:ExecutionAlias Alias="quadrant_next.exe" />
-                    </uap3:AppExecutionAlias>
-                </uap3:Extension>
+                    <uap5:AppExecutionAlias desktop4:Subsystem="console">
+                        <uap5:ExecutionAlias Alias="quadrantmc.exe" />
+                    </uap5:AppExecutionAlias>
+                </uap5:Extension>
                 <uap:Extension Category="windows.protocol">
                     <uap:Protocol Name="quadrantnext">
                         <uap:DisplayName
@@ -87,32 +88,6 @@
                         DisplayName="QuadrantMC"
                     />
                 </desktop:Extension>
-            </Extensions>
-        </Application>
-        <Application
-            Id="quadrantmc"
-            Executable="quadrantmc.exe"
-            EntryPoint="Windows.FullTrustApplication"
-            desktop4:SupportsMultipleInstances="true"
-        >
-            <uap:VisualElements
-                BackgroundColor="transparent"
-                DisplayName="quadrantmc"
-                Square150x150Logo="Images\Square150x150Logo.png"
-                Square44x44Logo="Images\Square44x44Logo.png"
-                Description="Manage your modpacks and mods from a terminal."
-                AppListEntry="none"
-            />
-            <Extensions>
-                <uap5:Extension
-                    Category="windows.appExecutionAlias"
-                    Executable="quadrantmc.exe"
-                    EntryPoint="Windows.FullTrustApplication"
-                >
-                    <uap5:AppExecutionAlias desktop4:Subsystem="console">
-                        <uap5:ExecutionAlias Alias="quadrantmc.exe" />
-                    </uap5:AppExecutionAlias>
-                </uap5:Extension>
             </Extensions>
         </Application>
     </Applications>
