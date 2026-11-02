@@ -4,7 +4,7 @@
 > `CLAUDE.md` is a symlink to this file. Keep both audiences (Claude + humans) in mind when editing.
 
 ## Quick start
-- **Package manager**: `bun` (`bun@1.4.2`) — never use npm, yarn, or pnpm. `bun install` in root.
+- **Package manager**: `bun` (`bun@1.4.4`) — never use npm, yarn, or pnpm. `bun install` in root.
 - All TS/JSX files start with `/** @format */`; keep this header when creating new files. (Rust files don't.)
 - **React 19** with the **React Compiler** enabled (`babel-plugin-react-compiler`) — don't hand-write `useMemo`/`useCallback` for things the compiler already memoizes.
 
