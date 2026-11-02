@@ -49,6 +49,13 @@
 
   <releases>
 
+    <release date="2026-11-02" version="26.11.0">
+      <description>
+        <p>Updated dependencies, including security fixes</p>
+        <p>Internal improvements</p>
+      </description>
+    </release>
+
     <release date="2026-10-03" version="26.10.1">
       <description>
         <p>Added quadrantmc, a command-line client that can do everything the app does and is installed alongside it</p>
