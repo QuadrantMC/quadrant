@@ -145,6 +145,21 @@ fn reveal(app: &tauri::AppHandle, links: &[String]) {
             .handle_cli_arguments(["quadrant", link.as_str()].into_iter());
     }
 }
+// Compile-time credentials are embedded only by the features that call the
+// Quadrant backend with them, so `--no-default-features` builds need none.
+#[cfg(feature = "quadrant_id")]
+const QUADRANT_OAUTH2_CLIENT_ID: &str = env!("QUADRANT_OAUTH2_CLIENT_ID");
+#[cfg(not(feature = "quadrant_id"))]
+const QUADRANT_OAUTH2_CLIENT_ID: &str = "";
+#[cfg(feature = "quadrant_id")]
+const QUADRANT_OAUTH2_CLIENT_SECRET: &str = env!("QUADRANT_OAUTH2_CLIENT_SECRET");
+#[cfg(not(feature = "quadrant_id"))]
+const QUADRANT_OAUTH2_CLIENT_SECRET: &str = "";
+// Quadrant Share/Sync and telemetry both authenticate with the API key.
+#[cfg(any(feature = "quadrant_id", feature = "telemetry"))]
+const QUADRANT_API_KEY: &str = env!("QUADRANT_API_KEY");
+#[cfg(not(any(feature = "quadrant_id", feature = "telemetry")))]
+const QUADRANT_API_KEY: &str = "";
 
 fn build_quadrant_host(
     app: &tauri::AppHandle,
@@ -158,9 +173,9 @@ fn build_quadrant_host(
         .unwrap_or_else(|| PathBuf::from("."));
     let mut options = QuadrantHostOptions::new(
         data_dir,
-        env!("QUADRANT_OAUTH2_CLIENT_ID"),
-        env!("QUADRANT_OAUTH2_CLIENT_SECRET"),
-        env!("QUADRANT_API_KEY"),
+        QUADRANT_OAUTH2_CLIENT_ID,
+        QUADRANT_OAUTH2_CLIENT_SECRET,
+        QUADRANT_API_KEY,
     );
     options.api_base_url = api_base_url.or_else(|| std::env::var("QUADRANT_API_BASE_URL").ok());
     options.app_version = app.package_info().version.to_string();
