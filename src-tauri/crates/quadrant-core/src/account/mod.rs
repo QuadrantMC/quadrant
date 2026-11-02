@@ -62,7 +62,7 @@ pub fn backend_base_url() -> String {
 /// Carries no default `User-Agent`: every account call site sets its own from
 /// the host-supplied string.
 static ACCOUNT_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
+    crate::mc_mod::http::shared_client_builder()
         .build()
         .expect("failed to build shared account HTTP client")
 });

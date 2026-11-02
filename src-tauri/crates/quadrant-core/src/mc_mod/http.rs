@@ -5,8 +5,26 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 
 use super::get_user_agent;
 
+/// Builder for the process-wide `reqwest` clients.
+///
+/// Under `cfg(test)` the clients keep no idle connections. Each
+/// `#[tokio::test]` runs on its own runtime, and a pooled connection's driver
+/// task lives on the runtime that opened it. httpmock recycles its servers, so
+/// the next test asks for the same `127.0.0.1:port` and can check out that
+/// connection while the previous test's runtime is shutting down, failing with
+/// "runtime dropped the dispatch task". Production runs one runtime per
+/// process, so it keeps the pool.
+pub(crate) fn shared_client_builder() -> reqwest::ClientBuilder {
+    let builder = reqwest::Client::builder();
+    if cfg!(test) {
+        builder.pool_max_idle_per_host(0)
+    } else {
+        builder
+    }
+}
+
 static PROVIDER_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
+    shared_client_builder()
         .user_agent(get_user_agent())
         .build()
         .expect("failed to build shared provider HTTP client")
