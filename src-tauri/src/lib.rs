@@ -1,4 +1,8 @@
-use quadrant_host::{QuadrantHost, QuadrantHostOptions};
+use quadrant_host::{
+    QuadrantHost, QuadrantHostOptions, app_paths,
+    single_instance::{self, Claim},
+    updates::App,
+};
 use std::path::PathBuf;
 use tauri::{
     Emitter, Manager,
@@ -10,7 +14,6 @@ use tokio::sync::Mutex;
 
 #[cfg(feature = "updater")]
 use tauri::Url;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 use tauri_plugin_deep_link::DeepLinkExt;
 #[cfg(feature = "updater")]
 use tauri_plugin_updater::UpdaterExt;
@@ -18,19 +21,25 @@ use tauri_plugin_updater::UpdaterExt;
 #[cfg(feature = "quadrant_id")]
 pub mod account;
 
+mod app_switch;
 pub mod config;
 pub mod mc_mod;
 pub mod modpacks;
 pub mod other;
 pub mod tauri_adapter;
 
-#[derive(Clone)]
 pub struct AppState {
     pub updated_modpacks: Vec<String>,
     pub is_update_enabled: bool,
     pub update: Option<tauri_plugin_updater::Update>,
     pub update_bytes: Vec<u8>,
+    /// A downloaded Quadrant-Native, when the channel names it.
+    #[cfg(feature = "updater")]
+    pub switch: Option<quadrant_host::updates::Update>,
 }
+
+/// This app, of the two sharing the data folder.
+const RUNNING: App = App::Quadrant;
 
 /// Decides whether the built-in auto-updater should run for this launch.
 ///
@@ -109,6 +118,33 @@ pub(crate) fn command_error(error: impl Into<anyhow::Error>) -> tauri::Error {
     quadrant_core::error::user_facing(error.into()).into()
 }
 
+/// Brings the window back for a later launch of either app and opens its
+/// links, as the launch would have.
+fn reveal(app: &tauri::AppHandle, links: &[String]) {
+    log::info!("A later launch handed over {links:?}");
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(e) = window.set_enabled(true) {
+            log::error!("Failed to enable window: {e}");
+        }
+        if let Err(e) = window.show() {
+            log::error!("Failed to show window: {e}");
+        }
+        if let Err(e) = window.unminimize() {
+            log::error!("Failed to unminimize window: {e}");
+        }
+        if let Err(e) = window.set_focus() {
+            log::error!("Failed to focus window: {e}");
+        }
+        if let Err(e) = window.center() {
+            log::error!("Failed to center window: {e}");
+        }
+    }
+    for link in links {
+        app.deep_link()
+            .handle_cli_arguments(["quadrant", link.as_str()].into_iter());
+    }
+}
+
 fn build_quadrant_host(
     app: &tauri::AppHandle,
     api_base_url: Option<String>,
@@ -140,49 +176,43 @@ pub async fn run() {
     // built before `setup` runs, so keep a copy here — the Flatpak workaround
     // in `setup` has to re-apply it to move the file it writes.
     let tray_image = context.tray_icon().map(|image| image.clone().to_owned());
-    let mut builder = tauri::Builder::default().manage(Mutex::new(AppState {
-        updated_modpacks: vec![],
-        is_update_enabled: false,
-        update: None,
-        update_bytes: vec![],
-    }));
 
-    #[cfg(desktop)]
+    // Before anything opens: the channel may name Quadrant-Native, and
+    // either app may already run for this data folder.
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let data_dir = app_switch::data_dir(&context.config().identifier);
+    let version = context.config().version.clone().unwrap_or_default();
+    if let Some(data_dir) = &data_dir
+        && app_switch::may_redirect(
+            &args,
+            &version,
+            tauri::is_dev(),
+            flatpak_host_shared_dir().is_some(),
+        )
+        && app_paths::redirect(data_dir, RUNNING, &args)
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _| {
-            log::info!("a new app instance was opened with {argv:?} and the deep link event was already triggered");
-            let w = app.get_webview_window("main").expect("no main window");
-            if let Err(e) = w.set_enabled(true) {
-                log::error!("Failed to enable window: {e}");
-            }
-            match w.show() {
-                Ok(_) => {}
-                Err(e) => {
-                    log::error!("Failed to show window: {}", e);
-                }
-            }
-            match w.set_focus() {
-                Ok(_) => {}
-                Err(e) => {
-                    log::error!("Failed to focus window: {}", e);
-                }
-            }
-            match w.unminimize() {
-                Ok(_) => {}
-                Err(e) => {
-                    log::error!("Failed to unminimize window: {}", e);
-                }
-            }
-            match w.center() {
-                Ok(_) => {}
-                Err(e) => {
-                    log::error!("Failed to center window: {}", e);
-                }
-            }
-        }));
+        return;
     }
+    let claim = data_dir.map(|dir| single_instance::claim(&dir, &app_switch::links(&args)));
+    let primary = match claim {
+        Some(Ok(Claim::Forwarded)) => return,
+        Some(Ok(Claim::Primary(primary))) => Some(primary),
+        Some(Err(error)) => {
+            log::warn!("Later launches will start instances of their own: {error:#}");
+            None
+        }
+        None => None,
+    };
 
-    builder = builder
+    let builder = tauri::Builder::default()
+        .manage(Mutex::new(AppState {
+            updated_modpacks: vec![],
+            is_update_enabled: false,
+            update: None,
+            update_bytes: vec![],
+            #[cfg(feature = "updater")]
+            switch: None,
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_persisted_scope::init())
@@ -229,6 +259,23 @@ pub async fn run() {
             app.manage(host.clone());
             log::info!("Initializing app...\nInitializing config...");
             host.init_config()?;
+
+            if let Some(primary) = primary {
+                let handle = app.handle().clone();
+                primary.serve(move |links| {
+                    let app = handle.clone();
+                    let shown = handle.run_on_main_thread(move || reveal(&app, &links));
+                    if let Err(error) = shown {
+                        log::error!("Failed to hand a later launch to the window: {error}");
+                    }
+                });
+            }
+            if app_switch::installed()
+                && let Some(path) = app_paths::current_executable()
+                && let Err(error) = app_paths::record(&host, RUNNING, &path)
+            {
+                log::warn!("Failed to record where Quadrant is installed: {error}");
+            }
 
             // One-time migration: the update channel used to live in a
             // separate updateConfig.json store. Fold it into the single config
@@ -562,35 +609,49 @@ async fn is_autoupdate_enabled(app: tauri::AppHandle) -> Result<bool, tauri::Err
 async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
     #[cfg(feature = "updater")]
     {
+        use quadrant_host::updates::{API_BASE, Channel, Platform};
+
         let app = _app;
-        let update_url = Url::parse(
-            "https://api.usequadrant.dev/api/any/quadrant/updates/stable/{{target}}/{{arch}}/{{current_version}}?variant={{bundle_type}}",
-        )?;
-
-        let mut update_urls = vec![update_url];
-
         let ms_store_build = app
             .config()
             .version
             .clone()
             .unwrap_or_default()
             .contains("msstore");
-
-        let defualt_channel = "stable";
-
-        let channel = app
-            .state::<QuadrantHost>()
-            .get_config_value("channel")
-            .ok()
-            .flatten()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_else(|| defualt_channel.to_string());
-        if channel != "stable" {
-            update_urls.push(Url::parse(&format!("https://api.usequadrant.dev/api/any/quadrant/updates/{}/{{{{target}}}}/{{{{arch}}}}/{{{{current_version}}}}?variant={{{{bundle_type}}}}",channel))?);
+        if ms_store_build {
+            return Ok(());
         }
-        // Prefer the preview version if we're updating from a preview version
-        update_urls.reverse();
 
+        let channel = Channel::read(&app.state::<QuadrantHost>());
+        {
+            let state = app.state::<Mutex<AppState>>();
+            let mut state = state.lock().await;
+            state.update = None;
+            state.update_bytes.clear();
+            state.switch = None;
+        }
+        // The title bar names what the download is for: an update of this
+        // app, or the app the channel switches to.
+        let switch_to = (channel.app() != RUNNING).then(|| channel.app().key());
+        app.emit("updateSwitch", switch_to)?;
+        app.emit("updateDownloadProgress", 0)?;
+        if switch_to.is_some() {
+            return check_switch(&app, channel).await;
+        }
+
+        let update_urls = channel
+            .urls(
+                API_BASE,
+                &Platform {
+                    target: "{{target}}",
+                    arch: "{{arch}}",
+                    version: "{{current_version}}",
+                    variant: "{{bundle_type}}",
+                },
+            )
+            .iter()
+            .map(|url| Url::parse(url))
+            .collect::<Result<Vec<_>, _>>()?;
         log::debug!(
             "Update URLs: {:?}",
             update_urls
@@ -604,13 +665,8 @@ async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
             .updater_builder()
             .endpoints(update_urls)?
             .version_comparator(|current, update| update.version != current)
-            .header("User-Agent", quadrant_core::mc_mod::get_user_agent())?;
-
-        if ms_store_build {
-            return Ok(());
-        }
-
-        let updater = updater.build()?;
+            .header("User-Agent", quadrant_core::mc_mod::get_user_agent())?
+            .build()?;
 
         if let Some(update) = updater.check().await? {
             let mut downloaded = 0;
@@ -622,9 +678,7 @@ async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
                         downloaded += chunk_length;
                         if let Some(content_length) = content_length.filter(|length| *length > 0) {
                             let progress = downloaded as f64 / content_length as f64;
-                            if let Err(error) = app.emit("updateDownloadProgress", progress) {
-                                log::warn!("Failed to emit update progress: {error}");
-                            }
+                            emit_download_progress(&app, progress);
                             log::info!("Downloaded {}%", (progress * 100.0).round() as i32);
                         }
                     },
@@ -635,13 +689,59 @@ async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
                 .await?;
 
             log::info!("Update downloaded");
-            app.emit("updateDownloadProgress", 1).unwrap();
             let state = app.state::<Mutex<AppState>>();
             let mut state = state.lock().await;
             state.update = Some(update);
             state.update_bytes = downloaded_update;
+            app.emit("updateDownloadProgress", 1)?;
         }
     }
+    Ok(())
+}
+
+/// Shows a download's progress, short of 1: the title bar offers to install
+/// at 1, which waits until the release is verified and stored.
+#[cfg(feature = "updater")]
+fn emit_download_progress(app: &tauri::AppHandle, progress: f64) {
+    if let Err(error) = app.emit("updateDownloadProgress", progress.min(0.99)) {
+        log::warn!("Failed to emit update progress: {error}");
+    }
+}
+
+/// Downloads Quadrant-Native's newest release on `channel`, for the title
+/// bar to offer as a switch.
+#[cfg(feature = "updater")]
+async fn check_switch(
+    app: &tauri::AppHandle,
+    channel: quadrant_host::updates::Channel,
+) -> Result<(), anyhow::Error> {
+    let Some(bundle) = app_switch::bundle() else {
+        log::info!(
+            "Not an installed copy; can't switch to {}",
+            channel.app().name()
+        );
+        return Ok(());
+    };
+    let updater = quadrant_host::updates::Updater {
+        running: RUNNING,
+        current_version: app.package_info().version.to_string(),
+        bundle,
+        server: quadrant_host::updates::API_BASE.to_string(),
+        allow_http: false,
+        user_agent: quadrant_core::mc_mod::get_user_agent(),
+    };
+    let Some(update) = updater
+        .check(channel, |progress| {
+            emit_download_progress(app, progress.into())
+        })
+        .await?
+    else {
+        return Ok(());
+    };
+    let state = app.state::<Mutex<AppState>>();
+    let mut state = state.lock().await;
+    state.switch = Some(update);
+    app.emit("updateDownloadProgress", 1)?;
     Ok(())
 }
 
@@ -649,6 +749,23 @@ async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
 async fn install_update(app: tauri::AppHandle) -> Result<(), tauri::Error> {
     let state = app.state::<Mutex<AppState>>();
     let mut state = state.lock().await;
+    #[cfg(feature = "updater")]
+    if let Some(switch) = state.switch.take() {
+        drop(state);
+        // Installs Quadrant-Native beside this app and starts it; this one
+        // quits so the new one becomes the single instance.
+        let (switch, result) = tauri::async_runtime::spawn_blocking(move || {
+            let result = switch.install();
+            (switch, result)
+        })
+        .await?;
+        if let Err(error) = result {
+            app.state::<Mutex<AppState>>().lock().await.switch = Some(switch);
+            return Err(crate::command_error(error));
+        }
+        app.exit(0);
+        return Ok(());
+    }
     let update = state.update.take();
     if update.is_none() {
         return Err(anyhow::anyhow!("No update available").into());

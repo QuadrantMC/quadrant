@@ -76,7 +76,6 @@ tauri-plugin-oauth = "2.1.0"
 tauri-plugin-opener = "2.7.2"
 tauri-plugin-os = "2.4.0"
 tauri-plugin-persisted-scope = "2.4.2"
-tauri-plugin-single-instance = { version = "2.5.5", features = ["deep-link"] }
 tauri-plugin-updater = "2.14.1"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["full"] }
@@ -105,7 +104,7 @@ telemetry = []
 curseforge = ["quadrant-core/curseforge", "quadrant-host/curseforge"]
 # Quadrant ID/Sync/Share
 quadrant_id = []
-updater = []
+updater = ["quadrant-host/updates"]
 proprietary = ["telemetry", "curseforge", "quadrant_id"]
 
 
@@ -117,7 +116,7 @@ tauri-build = { workspace = true }
 
 tauri = { workspace = true }
 quadrant-core = { path = "crates/quadrant-core" }
-quadrant-host = { path = "crates/quadrant-host" }
+quadrant-host = { path = "crates/quadrant-host", features = ["single-instance"] }
 
 tauri-plugin-opener = { workspace = true }
 serde = { workspace = true }
@@ -155,7 +154,6 @@ url = { workspace = true }
 
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-single-instance = { workspace = true }
 tauri-plugin-autostart = { workspace = true }
 tauri-plugin-cli = { workspace = true }
 tauri-plugin-updater = { workspace = true }

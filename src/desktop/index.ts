@@ -7,6 +7,7 @@ import type {
   DesktopWindowProgressState,
 } from "./types";
 import { ProgressBarStatus } from "./types";
+export type { UpdateSwitchPayload } from "./types";
 import { getRuntimeAdapter } from "./runtime";
 
 async function withRuntime<T>(

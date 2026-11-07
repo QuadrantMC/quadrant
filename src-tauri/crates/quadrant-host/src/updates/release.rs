@@ -262,6 +262,13 @@ mod tests {
     }
 
     #[test]
+    fn the_key_is_the_one_tauris_updater_checks() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../tauri.conf.json")).unwrap();
+        assert_eq!(config["plugins"]["updater"]["pubkey"], QUADRANT_PUBKEY);
+    }
+
+    #[test]
     fn reads_the_servers_row() {
         let body = br#"{
             "product": "quadrant-native", "version": "v26.10.1-gpui-preview.1",

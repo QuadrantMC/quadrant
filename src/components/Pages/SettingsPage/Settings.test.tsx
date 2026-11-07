@@ -116,6 +116,27 @@ describe("SettingsPage", () => {
     expect(invoke).toHaveBeenCalledWith("send_telemetry");
     expect(invoke).not.toHaveBeenCalledWith("remove_telemetry");
   });
+
+  it("offers the GPUI channels and checks the picked one for updates", async () => {
+    await renderSettled();
+    const picker = screen.getByRole("combobox", { name: "Update channel" });
+    expect(
+      Array.from(picker.querySelectorAll("option")).map((option) => [
+        option.value,
+        option.textContent,
+      ]),
+    ).toEqual([
+      ["stable", "Stable"],
+      ["preview", "Preview"],
+      ["gpui-preview", "GPUI Preview"],
+      ["gpui-experimental", "GPUI Experimental"],
+    ]);
+
+    await userEvent.selectOptions(picker, "gpui-experimental");
+
+    expect(storeSet).toHaveBeenCalledWith("channel", "gpui-experimental");
+    await waitFor(() => expect(requestCheckForUpdates).toHaveBeenCalled());
+  });
 });
 
 describe("SettingsPage Prism Launcher folder override", () => {
