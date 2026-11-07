@@ -49,6 +49,13 @@
 
   <releases>
 
+    <release date="2026-11-07" version="26.11.1">
+      <description>
+        <p>New GPUI Preview and GPUI Experimental update channels, which switch to Quadrant-Native</p>
+        <p>Quadrant and Quadrant-Native no longer run at the same time</p>
+      </description>
+    </release>
+
     <release date="2026-11-02" version="26.11.0">
       <description>
         <p>Updated dependencies, including security fixes</p>
