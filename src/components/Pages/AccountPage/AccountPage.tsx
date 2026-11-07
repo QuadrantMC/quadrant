@@ -277,7 +277,7 @@ export default function AccountPage() {
           className="bg-slate-800 hover:bg-slate-700 w-full h-full flex flex-row items-center justify-center text-lg"
           onClick={async () => {
             openIn(
-              "https://github.com/QuadrantMC/quadrant/blob/next/PRIVACY_POLICY.md",
+              "https://usequadrant.dev/terms",
             );
           }}
         >

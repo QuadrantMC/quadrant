@@ -77,7 +77,7 @@ You can also [download a build manually](https://github.com/QuadrantMC/quadrant/
 - **A modpack fails to apply right after installing Quadrant**: delete your `mods` folder and try again.
 - **Quadrant ID, Share or Sync don't work**: make sure your system clock is synced, then check the [status page](https://status.bultek.com.ua/status/main).
 - **Something doesn't work on Windows**: try enabling developer mode in system settings, or reinstall the app from the Microsoft Store.
-- **Requesting deletion of your data**: update to the latest version first. See the [privacy policy](PRIVACY_POLICY.md) for what the app collects.
+- **Requesting deletion of your data**: update to the latest version first. See the [privacy policy](https://usequadrant.dev/privacy) for what the app collects.
 
 ## Development
 
@@ -85,6 +85,6 @@ See [DEVELOP.md](DEVELOP.md) to set up and build the app, and [TESTING.md](TESTI
 
 ## License
 
-Quadrant is licensed under the [Mozilla Public License 2.0](LICENSE). Using Quadrant ID is subject to the [Quadrant ID terms of service](QUADRANT-ID-TOS.md).
+Quadrant is licensed under the [Mozilla Public License 2.0](LICENSE). Using Quadrant ID is subject to the [Quadrant ID terms of service](https://usequadrant.dev/terms).
 
 Quadrant and its developer are not affiliated with Mojang Studios or Microsoft.
