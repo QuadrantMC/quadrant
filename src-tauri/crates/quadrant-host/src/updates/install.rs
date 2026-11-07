@@ -11,6 +11,7 @@ use std::{
 use anyhow::{Context as _, Result, anyhow, ensure};
 
 use super::{App, Bundle};
+use crate::app_paths::Launch;
 
 /// How the running copy was installed, or `None` when it shouldn't update
 /// itself: a build run from `target/`, or a package manager that owns its
@@ -48,8 +49,15 @@ fn linux_binary(app: App) -> PathBuf {
 
 /// Installs `bytes`, the verified artifact of `app` for `bundle`, and
 /// starts it. The running app restarts with its arguments; the other app
-/// starts without any.
-pub(super) fn install(app: App, running: App, bundle: Bundle, bytes: &[u8]) -> Result<()> {
+/// starts without any. `release` runs just before the installed app can
+/// start, to let go of the single instance socket it is going to claim.
+pub(super) fn install(
+    app: App,
+    running: App,
+    bundle: Bundle,
+    bytes: &[u8],
+    release: impl FnOnce(),
+) -> Result<()> {
     let switching = app != running;
     let args: Vec<_> = if switching {
         Vec::new()
@@ -57,7 +65,7 @@ pub(super) fn install(app: App, running: App, bundle: Bundle, bytes: &[u8]) -> R
         env::args_os().skip(1).collect()
     };
     match bundle {
-        Bundle::Nsis => run_nsis(app, bytes),
+        Bundle::Nsis => run_nsis(app, bytes, release),
         Bundle::AppImage => {
             let current = PathBuf::from(env::var_os("APPIMAGE").context("APPIMAGE isn't set")?);
             let target = if switching {
@@ -66,6 +74,7 @@ pub(super) fn install(app: App, running: App, bundle: Bundle, bytes: &[u8]) -> R
                 current
             };
             write_appimage(&target, bytes)?;
+            release();
             launch(&target, &args)
         }
         Bundle::Deb | Bundle::Rpm => {
@@ -79,6 +88,7 @@ pub(super) fn install(app: App, running: App, bundle: Bundle, bytes: &[u8]) -> R
             } else {
                 env::current_exe()?
             };
+            release();
             launch(&binary, &args)
         }
         Bundle::App => {
@@ -89,6 +99,9 @@ pub(super) fn install(app: App, running: App, bundle: Bundle, bytes: &[u8]) -> R
                 current
             };
             replace_app(&target, bytes)?;
+            release();
+            // LaunchServices doesn't pass the environment on, so the new app
+            // starts without the handoff marker; the release covers it.
             let status = Command::new("open").arg("-n").arg(&target).status()?;
             ensure!(status.success(), "couldn't start {} ({status})", app.name());
             Ok(())
@@ -107,7 +120,7 @@ fn beside(path: &Path, name: &str) -> Result<PathBuf> {
 /// Runs the setup passively (`/P`); `/R` starts the installed app when it
 /// is done, in both apps' NSIS templates. A setup closes its own app if it
 /// is still running.
-fn run_nsis(app: App, bytes: &[u8]) -> Result<()> {
+fn run_nsis(app: App, bytes: &[u8], release: impl FnOnce()) -> Result<()> {
     let setup = env::temp_dir().join(format!(
         "{}-update-{}-setup.exe",
         app.slug(),
@@ -117,7 +130,9 @@ fn run_nsis(app: App, bytes: &[u8]) -> Result<()> {
     // Start-Process goes through ShellExecute, so a setup that needs
     // elevation asks for it instead of failing.
     let quoted = setup.display().to_string().replace('\'', "''");
+    release();
     let mut command = Command::new("powershell.exe");
+    Launch::Handoff.mark(&mut command);
     command.args([
         "-NoProfile",
         "-NonInteractive",
@@ -204,7 +219,8 @@ fn app_bundle(exe: &Path) -> Option<PathBuf> {
 }
 
 fn launch(program: &Path, args: &[std::ffi::OsString]) -> Result<()> {
-    Command::new(program)
+    Launch::Handoff
+        .mark(&mut Command::new(program))
         .args(args)
         .spawn()
         .map(drop)

@@ -17,9 +17,56 @@ use crate::{
 };
 
 pub const KEY: &str = "appPaths";
-/// Set on a redirected launch, so it never redirects again: two copies that
-/// disagree about the channel can't bounce a launch back and forth.
-const REDIRECTED: &str = "QUADRANT_REDIRECTED";
+/// Tells a launch which app started it, and why: [`Launch`].
+const LAUNCH: &str = "QUADRANT_LAUNCH";
+
+/// Who started this launch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Launch {
+    /// The user, a link or the login item.
+    Direct,
+    /// The other app's startup redirect. It never redirects again, so two
+    /// copies that disagree about the channel can't bounce a launch back and
+    /// forth.
+    Redirected,
+    /// The app it replaces or switches from, which is quitting. Its single
+    /// instance claim takes the socket over rather than handing its links to
+    /// the app that started it.
+    Handoff,
+}
+
+impl Launch {
+    /// Reads this launch's marker and removes it from the environment, so the
+    /// processes this app starts later (a browser that opens a link back into
+    /// it) don't inherit it. Call it first thing in `main`, before any thread
+    /// starts.
+    pub fn take() -> Launch {
+        let launch = match std::env::var(LAUNCH).as_deref() {
+            Ok("redirected") => Launch::Redirected,
+            Ok("handoff") => Launch::Handoff,
+            _ => Launch::Direct,
+        };
+        // SAFETY: called before other threads read or write the environment.
+        unsafe { std::env::remove_var(LAUNCH) };
+        launch
+    }
+
+    fn value(self) -> Option<&'static str> {
+        match self {
+            Launch::Direct => None,
+            Launch::Redirected => Some("redirected"),
+            Launch::Handoff => Some("handoff"),
+        }
+    }
+
+    /// Marks  as started by this kind of launch.
+    pub fn mark(self, command: &mut Command) -> &mut Command {
+        match self.value() {
+            Some(value) => command.env(LAUNCH, value),
+            None => command.env_remove(LAUNCH),
+        }
+    }
+}
 
 /// The file to start the running app again with: the AppImage rather than
 /// the binary mounted from it, which is gone once it quits.
@@ -60,8 +107,8 @@ pub fn redirect_target(config: &Value, running: App) -> Option<PathBuf> {
 /// the data folder at `data_dir` names it and it is installed; the caller
 /// then exits before claiming the single instance or opening a window.
 /// Reads the config without starting the host, which would write to it.
-pub fn redirect(data_dir: &Path, running: App, args: &[OsString]) -> bool {
-    if std::env::var_os(REDIRECTED).is_some() {
+pub fn redirect(data_dir: &Path, running: App, args: &[OsString], launch: Launch) -> bool {
+    if launch != Launch::Direct {
         return false;
     }
     let Some(config) = fs::read(data_dir.join("config.json"))
@@ -73,9 +120,8 @@ pub fn redirect(data_dir: &Path, running: App, args: &[OsString]) -> bool {
     let Some(target) = redirect_target(&config, running).filter(|path| path.is_file()) else {
         return false;
     };
-    match Command::new(&target)
-        .args(args)
-        .env(REDIRECTED, "1")
+    match Launch::Redirected
+        .mark(Command::new(&target).args(args))
         .spawn()
     {
         Ok(_) => {
@@ -133,7 +179,7 @@ mod tests {
     #[test]
     fn redirect_skips_a_missing_config_or_a_vanished_app() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!redirect(dir.path(), App::Quadrant, &[]));
+        assert!(!redirect(dir.path(), App::Quadrant, &[], Launch::Direct));
         fs::write(
             dir.path().join("config.json"),
             json!({
@@ -143,7 +189,7 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        assert!(!redirect(dir.path(), App::Quadrant, &[]));
+        assert!(!redirect(dir.path(), App::Quadrant, &[], Launch::Direct));
     }
 
     #[test]

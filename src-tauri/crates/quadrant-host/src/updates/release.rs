@@ -167,10 +167,11 @@ impl Update {
     }
 
     /// Puts the release in place and starts it, replacing the running app
-    /// or installing the other one beside it. Blocks; the caller quits once
-    /// it returns.
-    pub fn install(&self) -> Result<()> {
-        install::install(self.app, self.running, self.bundle, &self.bytes)
+    /// or installing the other one beside it. `release` lets go of the
+    /// single instance socket (`Serving::release`) just before the installed
+    /// app can start and claim it. Blocks; the caller quits once it returns.
+    pub fn install(&self, release: impl FnOnce()) -> Result<()> {
+        install::install(self.app, self.running, self.bundle, &self.bytes, release)
     }
 
     /// A ready update without a download, for screenshots and tests.

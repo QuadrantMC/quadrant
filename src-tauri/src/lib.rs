@@ -1,6 +1,7 @@
 use quadrant_host::{
-    QuadrantHost, QuadrantHostOptions, app_paths,
-    single_instance::{self, Claim},
+    QuadrantHost, QuadrantHostOptions,
+    app_paths::{self, Launch},
+    single_instance::{self, Claim, Serving},
     updates::App,
 };
 use std::path::PathBuf;
@@ -167,9 +168,11 @@ fn build_quadrant_host(
     QuadrantHost::new(options)
 }
 
+/// Runs the app. `launch` is this launch's marker, which `main` takes from
+/// the environment before any thread starts.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[allow(deprecated)]
-pub async fn run() {
+pub async fn run(launch: Launch) {
     log::info!("Initializing Tauri...");
     let context = tauri::generate_context!();
     // The tray image is embedded in the context at build time and the tray is
@@ -189,11 +192,13 @@ pub async fn run() {
             tauri::is_dev(),
             flatpak_host_shared_dir().is_some(),
         )
-        && app_paths::redirect(data_dir, RUNNING, &args)
+        && app_paths::redirect(data_dir, RUNNING, &args, launch)
     {
         return;
     }
-    let claim = data_dir.map(|dir| single_instance::claim(&dir, &app_switch::links(&args)));
+    let handoff = launch == Launch::Handoff;
+    let claim =
+        data_dir.map(|dir| single_instance::claim(&dir, &app_switch::links(&args), handoff));
     let primary = match claim {
         Some(Ok(Claim::Forwarded)) => return,
         Some(Ok(Claim::Primary(primary))) => Some(primary),
@@ -262,13 +267,14 @@ pub async fn run() {
 
             if let Some(primary) = primary {
                 let handle = app.handle().clone();
-                primary.serve(move |links| {
+                let serving = primary.serve(move |links| {
                     let app = handle.clone();
                     let shown = handle.run_on_main_thread(move || reveal(&app, &links));
                     if let Err(error) = shown {
                         log::error!("Failed to hand a later launch to the window: {error}");
                     }
                 });
+                app.manage(serving);
             }
             if app_switch::installed()
                 && let Some(path) = app_paths::current_executable()
@@ -755,8 +761,11 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), tauri::Error> {
         drop(state);
         // Installs Quadrant-Native beside this app and starts it; this one
         // quits so the new one becomes the single instance.
+        let serving = app
+            .try_state::<Serving>()
+            .map(|serving| serving.inner().clone());
         let (switch, result) = tauri::async_runtime::spawn_blocking(move || {
-            let result = switch.install();
+            let result = switch.install(|| release(serving.as_ref()));
             (switch, result)
         })
         .await?;
@@ -779,10 +788,26 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), tauri::Error> {
     // On Windows the NSIS `passive` installer shuts down and relaunches the app
     // itself. On macOS/Linux `install()` swaps the bundle in place and returns
     // without restarting, so we must relaunch explicitly.
+    // The relaunched copy claims the single instance socket, so this one
+    // lets go of it first.
     #[cfg(not(target_os = "windows"))]
-    app.restart();
+    {
+        release(
+            app.try_state::<Serving>()
+                .as_ref()
+                .map(|serving| serving.inner()),
+        );
+        app.restart();
+    }
     #[cfg(target_os = "windows")]
     Ok(())
+}
+
+/// Lets go of the single instance socket for the app about to start.
+fn release(serving: Option<&Serving>) {
+    if let Some(serving) = serving {
+        serving.release();
+    }
 }
 
 #[cfg(test)]
