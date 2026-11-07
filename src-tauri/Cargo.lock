@@ -4519,6 +4519,7 @@ dependencies = [
  "dbus-secret-service-keyring-store",
  "dirs 7.0.0",
  "futures",
+ "httpmock",
  "interprocess",
  "keyring-core",
  "log",

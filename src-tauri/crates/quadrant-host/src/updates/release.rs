@@ -82,6 +82,8 @@ pub struct Updater {
     /// Plain-http downloads, for a test server only.
     pub allow_http: bool,
     pub user_agent: String,
+    /// The key releases must be signed with: [`PUBKEY`] outside tests.
+    pub pubkey: String,
 }
 
 /// A downloaded release whose signature checked out, ready to install.
@@ -142,7 +144,7 @@ impl Updater {
             release.url
         );
         let bytes = download(&client, &release.url, &mut progress).await?;
-        verify(&bytes, &release.signature, PUBKEY)?;
+        verify(&bytes, &release.signature, &self.pubkey)?;
         log::info!(
             "{} {} is downloaded and its signature checks out",
             app.name(),
@@ -306,6 +308,7 @@ mod tests {
             server: "https://api.test".into(),
             allow_http: false,
             user_agent: "test".into(),
+            pubkey: TEST_PUBKEY.into(),
         }
     }
 
@@ -329,6 +332,109 @@ mod tests {
             [format!(
                 "https://api.test/api/any/quadrant/updates/stable/{tail}/0.0.0?variant=appimage"
             )]
+        );
+    }
+
+    /// A server with `channel`'s release of `app`: FIXTURE, signed as given.
+    fn serve(app: App, channel: &str, version: &str, signature: &str) -> httpmock::MockServer {
+        let server = httpmock::MockServer::start();
+        let url = server.url("/files/setup.exe");
+        server.mock(|when, then| {
+            when.path_includes(format!("/api/any/{}/updates/{channel}/", app.slug()));
+            then.status(200).json_body(serde_json::json!({
+                "version": format!("v{version}"),
+                "url": url,
+                "signature": signature,
+            }));
+        });
+        server.mock(|when, then| {
+            when.path("/files/setup.exe");
+            then.status(200).body(FIXTURE);
+        });
+        server
+    }
+
+    fn against(server: &httpmock::MockServer, running: App) -> Updater {
+        Updater {
+            server: server.base_url(),
+            allow_http: true,
+            ..updater(running)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_switch_downloads_and_verifies_the_other_apps_release() {
+        let server = serve(
+            App::QuadrantNative,
+            "gpui-preview",
+            "26.11.1-gpui-preview.1",
+            SIGNATURE,
+        );
+        let mut progress = Vec::new();
+        let update = against(&server, App::Quadrant)
+            .check(Channel::GpuiPreview, |done| progress.push(done))
+            .await
+            .unwrap()
+            .expect("a release to switch to");
+        assert_eq!(update.switches_to(), Some(App::QuadrantNative));
+        assert_eq!(update.version, "26.11.1-gpui-preview.1");
+        assert_eq!(update.bytes, FIXTURE);
+        assert_eq!(progress.first(), Some(&0.));
+        assert_eq!(progress.last(), Some(&1.));
+    }
+
+    #[tokio::test]
+    async fn the_running_version_is_no_update_but_the_other_apps_is_a_switch() {
+        let server = serve(App::Quadrant, "stable", "26.11.0-stable", SIGNATURE);
+        let running = against(&server, App::Quadrant);
+        assert!(
+            running
+                .check(Channel::Stable, |_| {})
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let native = against(&server, App::QuadrantNative);
+        let update = native
+            .check(Channel::Stable, |_| {})
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(update.switches_to(), Some(App::Quadrant));
+    }
+
+    #[tokio::test]
+    async fn a_release_signed_with_another_key_is_refused() {
+        let server = serve(
+            App::QuadrantNative,
+            "gpui-experimental",
+            "1.0.0",
+            OTHER_KEY_SIGNATURE,
+        );
+        let error = against(&server, App::QuadrantNative)
+            .check(Channel::GpuiExperimental, |_| {})
+            .await
+            .err()
+            .expect("a refusal");
+        assert!(
+            format!("{error:#}").contains("signature doesn't match"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_release_on_the_channel_is_nothing_to_install() {
+        let server = httpmock::MockServer::start();
+        server.mock(|_, then| {
+            then.status(404);
+        });
+        let updater = against(&server, App::QuadrantNative);
+        assert!(
+            updater
+                .check(Channel::GpuiPreview, |_| {})
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 

@@ -729,6 +729,7 @@ async fn check_switch(
         server: quadrant_host::updates::API_BASE.to_string(),
         allow_http: false,
         user_agent: quadrant_core::mc_mod::get_user_agent(),
+        pubkey: quadrant_host::updates::PUBKEY.to_string(),
     };
     let Some(update) = updater
         .check(channel, |progress| {
