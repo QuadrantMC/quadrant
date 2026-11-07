@@ -46,6 +46,7 @@ import {
   onOpenUrl,
   platform,
   ProgressBarStatus,
+  type UpdateSwitchPayload,
 } from "./desktop";
 import {
   applyUiScale,
@@ -113,6 +114,7 @@ function App() {
   const [page, setPage] = useState(pages[0]);
   const [content, setContent] = useState<Page>(pages[0]);
   const [updateDownloadProgress, setUpdateDownloadProgress] = useState(0);
+  const [updateSwitch, setUpdateSwitch] = useState<UpdateSwitchPayload>(null);
   const configRef = useRef(createDesktopStore("config.json"));
   const config = configRef.current;
   // A ref, not state: nothing renders from it, and every navigation must see
@@ -166,6 +168,20 @@ function App() {
         updateDownloadUnlisten();
       } else {
         cleanupFns.push(updateDownloadUnlisten);
+      }
+
+      const updateSwitchUnlisten = await listen<UpdateSwitchPayload>(
+        "updateSwitch",
+        (e) => {
+          if (!isUnmounted) {
+            setUpdateSwitch(e.payload);
+          }
+        },
+      );
+      if (isUnmounted) {
+        updateSwitchUnlisten();
+      } else {
+        cleanupFns.push(updateSwitchUnlisten);
       }
 
       const exportProgressUnlisten = await listen(
@@ -681,7 +697,11 @@ function App() {
                       >
                         {updateDownloadProgress === 1 ? (
                           <div className="flex align-middle justify-center items-center place-content-center">
-                            <p>{t("appUpdate")}</p>{" "}
+                            <p>
+                              {updateSwitch === "quadrantNative"
+                                ? t("switchToQuadrantNative")
+                                : t("appUpdate")}
+                            </p>{" "}
                             <md.MdInstallDesktop className="ml-2 w-6" />
                           </div>
                         ) : (

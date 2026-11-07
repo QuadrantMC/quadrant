@@ -32,6 +32,17 @@ import {
 } from "../../../uiScale";
 import { useReportError } from "../../../useReportError";
 
+/**
+ * The `channel` setting's values with their labels. Quadrant-Native shares
+ * the setting, and a GPUI channel switches to it (quadrant-host's `Channel`).
+ */
+const UPDATE_CHANNELS = [
+  ["stable", "stable"],
+  ["preview", "preview"],
+  ["gpui-preview", "gpuiPreview"],
+  ["gpui-experimental", "gpuiExperimental"],
+] as const;
+
 export default function SettingsPage() {
   const { t } = useTranslation();
   const reportError = useReportError();
@@ -180,8 +191,11 @@ export default function SettingsPage() {
               requestCheckForUpdates();
             }}
           >
-            <option value="stable">{t("stable")}</option>
-            <option value="preview">{t("preview")}</option>
+            {UPDATE_CHANNELS.map(([value, label]) => (
+              <option key={value} value={value}>
+                {t(label)}
+              </option>
+            ))}
           </Select>
         </Field>
       ) : (

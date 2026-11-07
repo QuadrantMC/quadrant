@@ -84,6 +84,9 @@ export type ProgressBarStatusValue =
 
 export type UpdateDownloadProgressPayload = number;
 
+/** The app a download switches to, or `null` for an update of this one. */
+export type UpdateSwitchPayload = "quadrantNative" | null;
+
 export interface QuadrantShareSubmissionPayload {
   code?: string | number;
   uses_left?: number;
@@ -99,6 +102,7 @@ export interface DesktopEventMap {
   recheckAccountToken: null;
   refreshSyncedModpacks: string | null;
   updateDownloadProgress: UpdateDownloadProgressPayload;
+  updateSwitch: UpdateSwitchPayload;
 }
 
 export type DesktopEventName = keyof DesktopEventMap;

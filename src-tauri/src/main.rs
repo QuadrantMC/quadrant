@@ -54,6 +54,8 @@ fn maybe_reexec_with_linux_wayland_nvidia_workaround() {}
 
 fn main() {
     maybe_reexec_with_linux_wayland_nvidia_workaround();
+    // Before any thread starts: it edits the environment.
+    let launch = quadrant_host::app_paths::Launch::take();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -61,6 +63,6 @@ fn main() {
         .expect("Failed to build tokio runtime");
 
     runtime.block_on(async {
-        quadrant_next_lib::run().await;
+        quadrant_next_lib::run(launch).await;
     });
 }

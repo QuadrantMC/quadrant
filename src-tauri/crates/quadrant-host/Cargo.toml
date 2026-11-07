@@ -6,14 +6,24 @@ edition = "2024"
 [features]
 default = []
 curseforge = ["quadrant-core/curseforge"]
+# One running app per data folder, shared by Quadrant and Quadrant-Native.
+single-instance = ["dep:interprocess", "dep:windows-sys"]
+# Checking, verifying and installing releases, and switching between the two
+# apps. The Node addon and the CLI need neither.
+updates = ["dep:base64", "dep:minisign-verify", "dep:reqwest"]
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = { version = "0.22", optional = true }
 colog = { workspace = true }
+dirs = { workspace = true }
 futures = { workspace = true }
+interprocess = { version = "2", default-features = false, optional = true }
 keyring-core = { workspace = true }
 log = { workspace = true }
+minisign-verify = { version = "0.3", optional = true }
 quadrant-core = { path = "../quadrant-core" }
+reqwest = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -22,10 +32,12 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+httpmock = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = { workspace = true }
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { workspace = true }
