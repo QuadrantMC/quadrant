@@ -6,6 +6,11 @@ use std::{
     time::Duration,
 };
 
+pub mod app_paths;
+#[cfg(feature = "single-instance")]
+pub mod single_instance;
+pub mod updates;
+
 use anyhow::anyhow;
 use futures::StreamExt;
 use keyring_core::{Entry, Error as KeyringError, set_default_store};
