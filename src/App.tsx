@@ -354,12 +354,16 @@ function App() {
               if (action.providedState !== oAuthState) {
                 return;
               }
+              const codeVerifier = await config.get<string>("oauthVerifier");
+              await config.delete("oauthState");
+              await config.delete("oauthVerifier");
               if (action.code === null) {
                 return;
               }
               await invoke("oauth2_login", {
                 code: action.code,
                 redirectUri: action.redirectUri,
+                codeVerifier,
               });
               return;
             }

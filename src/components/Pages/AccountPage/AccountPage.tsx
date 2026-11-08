@@ -6,6 +6,7 @@ import { clearAccountToken, getAccountInfo, openIn } from "../../../tools";
 import Button from "../../core/Button";
 import CircularProgress from "../../core/CircularProgress";
 import { useTranslation } from "react-i18next";
+import { codeChallengeS256, createCodeVerifier } from "../../../pkce";
 import { MdOpenInBrowser } from "react-icons/md";
 import { ContentContext } from "../../../intefaces";
 import {
@@ -187,7 +188,9 @@ export default function AccountPage() {
               ).join("");
 
               try {
+                const codeVerifier = createCodeVerifier();
                 await config.set("oauthState", randomString);
+                await config.set("oauthVerifier", codeVerifier);
                 const port = await startOAuthServer({
                   response:
                     "<html><body><h1>" +
@@ -206,8 +209,6 @@ export default function AccountPage() {
                   await cancelOAuthServer(port);
                 };
 
-                console.log(`OAuth server started on port ${port}`);
-
                 const redirectUri = `http://127.0.0.1:${port}`;
                 const clientId = await invoke<string>("oauth2_client_id");
                 const authUrl = new URL(
@@ -221,6 +222,11 @@ export default function AccountPage() {
                 );
                 authUrl.searchParams.set("response_type", "code");
                 authUrl.searchParams.set("state", randomString);
+                authUrl.searchParams.set(
+                  "code_challenge",
+                  await codeChallengeS256(codeVerifier),
+                );
+                authUrl.searchParams.set("code_challenge_method", "S256");
                 openIn(authUrl.toString());
 
                 unlistenOAuth = await onOAuthUrl(async (rawUrl) => {
@@ -244,13 +250,15 @@ export default function AccountPage() {
                     const oAuthState = await config.get<string>("oauthState");
 
                     const providedState = url.searchParams.get("state");
-                    console.log("State: " + oAuthState);
-                    console.log("Provided state: " + providedState);
                     if (providedState !== oAuthState) {
                       throw new Error("OAuth state mismatch");
                     }
+                    const codeVerifier =
+                      await config.get<string>("oauthVerifier");
+                    // A state is good for one redirect only.
+                    await config.delete("oauthState");
+                    await config.delete("oauthVerifier");
                     const code = url.searchParams.get("code");
-                    console.log("Code: " + code);
                     if (code === null) {
                       throw new Error("Missing OAuth code");
                     }
@@ -258,6 +266,7 @@ export default function AccountPage() {
                     await invoke("oauth2_login", {
                       code: code,
                       redirectUri: redirectUri,
+                      codeVerifier,
                     });
                   } catch (error) {
                     console.error(error);
