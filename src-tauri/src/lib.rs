@@ -302,6 +302,7 @@ pub async fn run(launch: Launch) {
             app.manage(host.clone());
             log::info!("Initializing app...\nInitializing config...");
             host.init_config()?;
+            config::allow_watching_minecraft_folder(app.handle());
             let backfill_host = host.clone();
             tauri::async_runtime::spawn(async move {
                 match backfill_host.backfill_mod_hashes().await {
