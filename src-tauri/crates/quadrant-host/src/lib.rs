@@ -11,7 +11,7 @@ pub mod app_paths;
 pub mod single_instance;
 pub mod updates;
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use futures::StreamExt;
 use keyring_core::{Entry, Error as KeyringError, set_default_store};
 use quadrant_core::{
@@ -187,21 +187,75 @@ struct JsonFileStore {
 
 impl JsonFileStore {
     fn new(path: PathBuf) -> Result<Self> {
-        let values = Self::read_values_from_disk(&path)?;
-        Ok(Self {
+        let store = Self {
             path,
-            values: Arc::new(Mutex::new(values)),
-        })
+            values: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let values = store.load_or_set_aside()?;
+        *store
+            .values
+            .lock()
+            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))? = values;
+        Ok(store)
     }
 
-    fn read_values_from_disk(path: &PathBuf) -> Result<HashMap<String, Value>> {
-        if !path.exists() {
-            return Ok(HashMap::new());
+    /// The values on disk. A file that does not parse (a bad hand edit) is
+    /// moved aside to `<name>.corrupt-<unix ms>` and the store starts empty, so
+    /// the host fills in defaults instead of failing to start.
+    fn load_or_set_aside(&self) -> Result<HashMap<String, Value>> {
+        let error = match Self::read_values_from_disk(&self.path) {
+            Ok(values) => return Ok(values),
+            Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => error,
+            Err(error) => return Err(error),
+        };
+        let _lock = self.lock_file()?;
+        // Another process starting at the same time may have done this already.
+        match Self::read_values_from_disk(&self.path) {
+            Ok(values) => return Ok(values),
+            Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {}
+            Err(error) => return Err(error),
         }
+        let file_name = self
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let backup = self.path.with_file_name(format!(
+            "{file_name}.corrupt-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+        fs::rename(&self.path, &backup)?;
+        log::error!(
+            "{error:#}. Moved it to {} and started from the defaults",
+            backup.display()
+        );
+        Ok(HashMap::new())
+    }
 
-        let raw = fs::read_to_string(path)?;
-        serde_json::from_str::<HashMap<String, Value>>(&raw)
-            .map_err(|error| anyhow!("failed to parse {}: {error}", path.display()))
+    fn read_values_from_disk(path: &Path) -> Result<HashMap<String, Value>> {
+        let raw = match fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(HashMap::new());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        Ok(serde_json::from_str::<HashMap<String, Value>>(&raw)
+            .with_context(|| format!("failed to parse {}", path.display()))?)
+    }
+
+    /// Held around every reload-modify-persist, so a write from another
+    /// process sharing the data folder is never overwritten with an older copy.
+    fn lock_file(&self) -> Result<fs::File> {
+        let mut lock_path = self.path.clone().into_os_string();
+        lock_path.push(".lock");
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Ok(quadrant_core::modpacks::lock_file(Path::new(&lock_path))?)
     }
 
     fn reload(&self, values: &mut HashMap<String, Value>) -> Result<()> {
@@ -216,21 +270,17 @@ impl JsonFileStore {
             .values
             .lock()
             .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))?;
+        let _lock = self.lock_file()?;
         self.reload(&mut values)?;
         values.remove(key);
         self.persist(&values)
     }
 
     fn persist(&self, values: &HashMap<String, Value>) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let temp_path = self.path.with_extension(format!("{}.tmp", Uuid::now_v7()));
-        fs::write(
-            &temp_path,
+        quadrant_core::modpacks::write_file_atomically(
+            &self.path,
             serde_json::to_vec_pretty(&Value::Object(values.clone().into_iter().collect()))?,
         )?;
-        fs::rename(temp_path, &self.path)?;
         Ok(())
     }
 }
@@ -250,6 +300,7 @@ impl SettingsStore for JsonFileStore {
             .values
             .lock()
             .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))?;
+        let _lock = self.lock_file()?;
         self.reload(&mut values)?;
         values.insert(key.to_string(), value);
         self.persist(&values)
@@ -2971,17 +3022,57 @@ mod tests {
     }
 
     #[test]
-    fn json_store_rejects_non_object_documents() {
+    fn json_store_sets_unreadable_documents_aside_and_starts_empty() {
+        for document in ["[]", "null", "true", "42", "\"settings\"", "{\"mcFolder\":"] {
+            let temp_dir = tempdir().unwrap();
+            let path = temp_dir.path().join("config.json");
+            fs::write(&path, document).unwrap();
+
+            let store = JsonFileStore::new(path.clone()).unwrap();
+
+            assert!(store.entries().unwrap().is_empty(), "kept {document}");
+            assert!(!path.exists());
+            let backups: Vec<_> = fs::read_dir(temp_dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("config.json.corrupt-")
+                })
+                .collect();
+            assert_eq!(backups.len(), 1);
+            assert_eq!(fs::read_to_string(&backups[0]).unwrap(), document);
+
+            store.set_bool("modrinth", true).unwrap();
+            let reloaded = JsonFileStore::new(path).unwrap();
+            assert_eq!(reloaded.get_bool("modrinth").unwrap(), Some(true));
+        }
+    }
+
+    #[test]
+    fn json_stores_sharing_a_file_keep_each_others_writes() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("config.json");
-        for document in ["[]", "null", "true", "42", "\"settings\""] {
-            fs::write(&path, document).unwrap();
-            assert!(
-                JsonFileStore::new(path.clone()).is_err(),
-                "accepted {document}"
-            );
-            assert_eq!(fs::read_to_string(&path).unwrap(), document);
-        }
+        // Separate stores have separate in-process locks, like two processes.
+        let stores = [
+            JsonFileStore::new(path.clone()).unwrap(),
+            JsonFileStore::new(path.clone()).unwrap(),
+        ];
+        std::thread::scope(|scope| {
+            for (index, store) in stores.iter().enumerate() {
+                scope.spawn(move || {
+                    for key in 0..40 {
+                        store.set_i64(&format!("key-{index}-{key}"), key).unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            JsonFileStore::new(path).unwrap().entries().unwrap().len(),
+            80
+        );
     }
 
     #[test]

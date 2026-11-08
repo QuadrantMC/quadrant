@@ -24,9 +24,25 @@ use std::{
 use tokio::sync::Mutex;
 use zip::write::{ExtendedFileOptions, FileOptions};
 
+/// Opens `path`, creating it, and holds an exclusive advisory lock on it until
+/// the returned file is dropped. Quadrant, Quadrant-Native and the CLI share
+/// the data folder, the game folder and the mod cache, and this keeps their
+/// read-modify-write cycles of one file from interleaving. Take it after any
+/// in-process lock for the same file, never while holding it across an await.
+pub fn lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    file.lock()?;
+    Ok(file)
+}
+
 /// Writes `contents` through a sibling temp file and an atomic rename, so a
 /// crash mid-write never leaves a truncated manifest or metadata file behind.
-pub(crate) fn write_file_atomically(
+pub fn write_file_atomically(
     path: impl AsRef<Path>,
     contents: impl AsRef<[u8]>,
 ) -> std::io::Result<()> {
