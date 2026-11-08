@@ -192,6 +192,63 @@ pub async fn add_cache_index(
     file_bytes: &[u8],
     file_hash: String,
 ) -> Result<PathBuf, anyhow::Error> {
+    add_cache_entry(file_name, file_hash, |path| {
+        crate::modpacks::write_file_atomically(path, file_bytes)
+    })
+    .await
+}
+
+/// [`add_cache_index`] for a file already downloaded to `download` (from
+/// [`download_path`]), which is moved into the cache instead of read into
+/// memory. `download` is gone afterwards either way.
+pub(crate) async fn add_cache_file(
+    file_name: String,
+    download: &Path,
+    file_hash: String,
+) -> Result<PathBuf, anyhow::Error> {
+    let result =
+        add_cache_entry(file_name, file_hash, |path| std::fs::rename(download, path)).await;
+    let _ = std::fs::remove_file(download);
+    result
+}
+
+/// A fresh path in the cache folder for a download to stream into, so
+/// [`add_cache_file`] can rename it into place.
+pub(crate) fn download_path() -> std::io::Result<PathBuf> {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let cache_dir = cache_dir();
+    std::fs::create_dir_all(&cache_dir)?;
+    Ok(cache_dir.join(format!(
+        ".download-{}-{}.part",
+        std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )))
+}
+
+/// Lowercase hex SHA-1 and SHA-512 of a file on disk, read in chunks.
+pub(crate) fn file_hashes(path: &Path) -> std::io::Result<(String, String)> {
+    let mut file = std::fs::File::open(path)?;
+    let mut sha1 = Sha1::new();
+    let mut sha512 = sha2::Sha512::new();
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        let read = match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        sha1.update(&buffer[..read]);
+        sha512.update(&buffer[..read]);
+    }
+    Ok((hex::encode(sha1.finalize()), hex::encode(sha512.finalize())))
+}
+
+async fn add_cache_entry(
+    file_name: String,
+    file_hash: String,
+    place: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<PathBuf, anyhow::Error> {
     let _guard = CACHE_WRITE_LOCK.lock().await;
     let cache_dir = cache_dir();
     let _lock = lock_index(&cache_dir)?;
@@ -230,7 +287,7 @@ pub async fn add_cache_index(
         }
     };
     if !file_path.is_file() {
-        crate::modpacks::write_file_atomically(&file_path, file_bytes)?;
+        place(&file_path)?;
     }
 
     write_index(&cache_dir, &entries)?;

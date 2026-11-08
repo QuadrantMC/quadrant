@@ -174,13 +174,18 @@ pub struct UniversalModFile {
 impl UniversalModFile {
     /// Whether `bytes` are this file. Every provider file names at least one
     /// hash, so a file without any is refused rather than trusted.
+    #[cfg(test)]
     fn matches(&self, bytes: &[u8]) -> bool {
-        let sha1_matches =
-            self.sha1.is_empty() || file_hash(bytes).eq_ignore_ascii_case(&self.sha1);
+        self.matches_hashes(&file_hash(bytes), &sha512_hex(bytes))
+    }
+
+    /// [`Self::matches`] for a file whose SHA-1 and SHA-512 are known.
+    fn matches_hashes(&self, sha1: &str, sha512: &str) -> bool {
+        let sha1_matches = self.sha1.is_empty() || sha1.eq_ignore_ascii_case(&self.sha1);
         let sha512_matches = self
             .sha512
             .as_ref()
-            .is_none_or(|expected| sha512_hex(bytes).eq_ignore_ascii_case(expected));
+            .is_none_or(|expected| sha512.eq_ignore_ascii_case(expected));
         (!self.sha1.is_empty() || self.sha512.is_some()) && sha1_matches && sha512_matches
     }
 }
@@ -682,14 +687,15 @@ pub async fn get_file(
 
     if let Some(cached_file) = get_cache_index(file.sha1.clone()).await? {
         log::info!("Cache hit for mod {id} (sha1={})", file.sha1);
-        match std::fs::read(&cached_file.file_name) {
-            Ok(cached_file_bytes) if file.matches(&cached_file_bytes) => {
-                let file_path = add_cache_index(
-                    file.file_name.clone(),
-                    cached_file_bytes.as_slice(),
-                    file.sha1.clone(),
-                )
-                .await?;
+        let cached_path = PathBuf::from(&cached_file.file_name);
+        let hashed = {
+            let cached_path = cached_path.clone();
+            tokio::task::spawn_blocking(move || cache::file_hashes(&cached_path)).await?
+        };
+        match hashed {
+            Ok((sha1, sha512)) if file.matches_hashes(&sha1, &sha512) => {
+                // Only refreshes the entry's last-used date: its file is there.
+                let file_path = add_cache_index(file.file_name.clone(), &[], sha1).await?;
                 event_sink.publish(BackendEvent::ModDownloadProgress(ModProgressPayload {
                     mod_id: id,
                     progress: 100,
@@ -698,7 +704,7 @@ pub async fn get_file(
             }
             Ok(_) => {
                 log::warn!("Discarding corrupt cache entry for sha1={}", file.sha1);
-                let _ = std::fs::remove_file(&cached_file.file_name);
+                let _ = std::fs::remove_file(&cached_path);
             }
             Err(error) => {
                 // Not fatal: the download below writes the file again under
@@ -707,7 +713,7 @@ pub async fn get_file(
                     "Cached file for sha1={} is unreadable ({error}); re-downloading",
                     file.sha1
                 );
-                let _ = std::fs::remove_file(&cached_file.file_name);
+                let _ = std::fs::remove_file(&cached_path);
             }
         }
     }
@@ -727,33 +733,59 @@ pub async fn get_file(
             }
             _ => error.into(),
         })?;
-    let mut body = response.bytes_stream();
-    let mut file_bytes = Vec::new();
-    while let Some(next) = body.next().await {
-        let new_bytes = next?;
-        file_bytes.append(&mut new_bytes.to_vec());
-        let progress = if file.size == 0 {
-            0
-        } else {
-            ((file_bytes.len() as f64 / file.size as f64) * 100_f64)
-                .round()
-                .clamp(0.0, 99.0) as i32
-        };
-        event_sink.publish(BackendEvent::ModDownloadProgress(ModProgressPayload {
-            mod_id: id.clone(),
-            progress,
-        }))?;
-    }
-    if !file.matches(&file_bytes) {
+
+    // Streamed to disk and hashed as it arrives, so a large shader pack is
+    // never held in memory.
+    let download = PartialDownload(cache::download_path()?);
+    let (sha1, sha512) = {
+        use sha1::Digest;
+        use tokio::io::AsyncWriteExt;
+
+        let mut out = tokio::fs::File::create(&download.0).await?;
+        let mut sha1 = sha1::Sha1::new();
+        let mut sha512 = sha2::Sha512::new();
+        let mut received = 0_u64;
+        let mut body = response.bytes_stream();
+        while let Some(next) = body.next().await {
+            let chunk = next?;
+            sha1.update(&chunk);
+            sha512.update(&chunk);
+            out.write_all(&chunk).await?;
+            received += chunk.len() as u64;
+            let progress = if file.size == 0 {
+                0
+            } else {
+                ((received as f64 / file.size as f64) * 100_f64)
+                    .round()
+                    .clamp(0.0, 99.0) as i32
+            };
+            event_sink.publish(BackendEvent::ModDownloadProgress(ModProgressPayload {
+                mod_id: id.clone(),
+                progress,
+            }))?;
+        }
+        out.sync_all().await?;
+        (hex::encode(sha1.finalize()), hex::encode(sha512.finalize()))
+    };
+    if !file.matches_hashes(&sha1, &sha512) {
         return Err(anyhow::Error::from(crate::error::ErrorCode::Checksum));
     }
-    let hash = file_hash(file_bytes.as_slice());
-    let file_path = add_cache_index(file.file_name.clone(), &file_bytes, hash).await?;
+    let file_path = cache::add_cache_file(file.file_name.clone(), &download.0, sha1).await?;
     event_sink.publish(BackendEvent::ModDownloadProgress(ModProgressPayload {
         mod_id: id,
         progress: 100,
     }))?;
     Ok((file_path, file.download_url))
+}
+
+/// A download in the cache folder that is not in the cache yet, removed if
+/// the download fails or its future is dropped.
+struct PartialDownload(PathBuf);
+
+impl Drop for PartialDownload {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// Resolves the file name a download URL installs as.
@@ -1723,6 +1755,7 @@ mod tests {
 
         download.assert();
         assert_eq!(std::fs::read(path).unwrap(), bytes);
+        assert!(partial_downloads().is_empty());
     }
 
     #[tokio::test]
@@ -1817,5 +1850,15 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.to_string(), "errorChecksum");
         download.assert_calls(1);
+        assert!(partial_downloads().is_empty());
+    }
+
+    fn partial_downloads() -> Vec<String> {
+        let cache_dir = std::env::var("QUADRANT_TEST_CACHE_DIR").unwrap();
+        std::fs::read_dir(cache_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".part"))
+            .collect()
     }
 }
