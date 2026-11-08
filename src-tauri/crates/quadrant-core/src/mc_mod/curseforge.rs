@@ -17,7 +17,7 @@ use crate::{
 
 use super::{
     GetModArgs, IdentifiedMod, Mod, ModType, SearchCategory, SearchModsArgs, UniversalModFile,
-    UnknownJar, get_file, get_mod_url,
+    UnknownJar, check_provider_id, get_file, get_mod_url,
 };
 use crate::mc_mod::http::{provider_cached_client, provider_http_client};
 
@@ -131,8 +131,9 @@ fn fingerprint_cache_key(fingerprints: &[u32]) -> String {
 }
 
 pub async fn get_mod_curseforge(args: GetModArgs) -> Result<Mod> {
+    let id = check_provider_id(&args.id, true)?;
     let res_json: serde_json::Value = provider_cached_client()
-        .get(format!("{}/v1/mods/{}", curseforge_api_base(), args.id))
+        .get(format!("{}/v1/mods/{}", curseforge_api_base(), id))
         .header("X-API-Key", env!("ETERNAL_API_TOKEN"))
         .send()
         .await?
@@ -191,6 +192,7 @@ pub async fn get_mod_curseforge(args: GetModArgs) -> Result<Mod> {
 }
 
 pub async fn get_mod_owners_curseforge(id: String) -> Result<Vec<String>> {
+    let id = check_provider_id(&id, true)?;
     let res_json: serde_json::Value = provider_cached_client()
         .get(format!("{}/v1/mods/{}", curseforge_api_base(), id))
         .header("X-API-Key", env!("ETERNAL_API_TOKEN"))
@@ -210,6 +212,7 @@ pub async fn get_mod_owners_curseforge(id: String) -> Result<Vec<String>> {
 }
 
 pub async fn get_mod_deps_curseforge(id: String) -> Result<Vec<Mod>> {
+    let id = check_provider_id(&id, true)?;
     let res_json: serde_json::Value = provider_cached_client()
         .get(format!("{}/v1/mods/{}", curseforge_api_base(), id))
         .header("X-API-Key", env!("ETERNAL_API_TOKEN"))
@@ -440,12 +443,13 @@ pub async fn get_latest_mod_version_curseforge(
     mod_type: ModType,
     file_id: Option<String>,
 ) -> Result<Option<ModFile>> {
+    let id = check_provider_id(&id, true)?;
     let mut url = format!("{}/v1/mods/{}/files", curseforge_api_base(), id);
     let mut query = vec![("gameVersion", minecraft_version)];
     if let Some(file_id) = file_id.clone() {
         // Explicit file installs do not use modLoaderType, so preserve them even if
         // the last selected UI loader is Modrinth-only.
-        url = format!("{}/{}", url, file_id);
+        url = format!("{}/{}", url, check_provider_id(&file_id, true)?);
     } else if mod_type == ModType::Mod && mod_loader != ModLoader::Unknown {
         let Some(curseforge_id) = mod_loader.curseforge_id() else {
             return Ok(None);

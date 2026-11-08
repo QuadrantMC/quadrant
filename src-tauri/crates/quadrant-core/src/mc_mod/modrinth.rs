@@ -12,7 +12,7 @@ use crate::{
 use super::http::{provider_cached_client, provider_http_client};
 use super::{
     GetModArgs, IdentifiedMod, InstalledMod, Mod, ModType, SearchCategory, SearchModsArgs,
-    UniversalModFile, UnknownJar, get_file, get_mod_url,
+    UniversalModFile, UnknownJar, check_provider_id, get_file, get_mod_url,
 };
 
 pub(crate) fn modrinth_api_base() -> String {
@@ -197,8 +197,9 @@ fn prettify_slug(slug: &str) -> String {
 }
 
 pub async fn get_mod_modrinth(args: GetModArgs) -> Result<Mod> {
+    let id = check_provider_id(&args.id, false)?;
     let res_json: serde_json::Value = provider_cached_client()
-        .get(format!("{}/v2/project/{}", modrinth_api_base(), args.id))
+        .get(format!("{}/v2/project/{}", modrinth_api_base(), id))
         .send()
         .await?
         .json()
@@ -271,6 +272,7 @@ fn mod_from_project(res_json: &serde_json::Value, args: GetModArgs) -> Result<Mo
 }
 
 pub async fn get_mod_owners_modrinth(id: String) -> Result<Vec<String>> {
+    let id = check_provider_id(&id, false)?;
     let res_json: serde_json::Value = provider_cached_client()
         .get(format!("{}/v2/project/{}/members", modrinth_api_base(), id))
         .send()
@@ -373,6 +375,7 @@ pub async fn get_latest_mod_version_modrinth(
     mod_loader: ModLoader,
     mod_type: ModType,
 ) -> Result<Option<ModrinthFile>> {
+    let id = check_provider_id(&id, false)?;
     let mut query = vec![("game_versions", format!("[\"{}\"]", minecraft_version))];
     if mod_type == ModType::Mod {
         if let Some(loader_slug) = mod_loader.modrinth_slug() {

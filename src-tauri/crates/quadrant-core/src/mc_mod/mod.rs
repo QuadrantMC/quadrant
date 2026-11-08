@@ -301,6 +301,25 @@ pub struct IdentifiedMod {
     pub file_name: String,
 }
 
+/// Checks a provider project or file id before it goes into a request path.
+/// Ids arrive from deep links and shared manifests, and `..` or a `/` in one
+/// would send the provider's API key to some other endpoint of its host.
+/// CurseForge ids are numbers; Modrinth ids and slugs are letters, digits,
+/// `-` and `_`.
+pub(crate) fn check_provider_id(id: &str, numeric: bool) -> Result<&str> {
+    let valid = !id.is_empty()
+        && id.len() <= 64
+        && id.bytes().all(|byte| {
+            byte.is_ascii_digit()
+                || (!numeric && (byte.is_ascii_alphabetic() || byte == b'-' || byte == b'_'))
+        });
+    if valid {
+        Ok(id)
+    } else {
+        Err(anyhow!("{id:?} is not a valid mod or file id"))
+    }
+}
+
 /// Returns the default Quadrant user agent used for upstream requests.
 pub fn get_user_agent() -> String {
     format!(
@@ -1853,6 +1872,33 @@ mod tests {
         assert_eq!(error.to_string(), "errorChecksum");
         download.assert_calls(1);
         assert!(partial_downloads().is_empty());
+    }
+
+    #[test]
+    fn provider_ids_cannot_steer_a_request_path() {
+        for (id, numeric) in [
+            ("238222", true),
+            ("AANobbMI", false),
+            ("fabric-api", false),
+            ("my_mod", false),
+        ] {
+            assert_eq!(check_provider_id(id, numeric).unwrap(), id);
+        }
+        for (id, numeric) in [
+            ("", true),
+            ("../../x", true),
+            ("12/../34", true),
+            ("12?x=1", true),
+            ("abc", true),
+            ("-1", true),
+            ("..", false),
+            ("a/b", false),
+            ("a%2fb", false),
+            ("a b", false),
+            (&"a".repeat(65), false),
+        ] {
+            assert!(check_provider_id(id, numeric).is_err(), "{id}");
+        }
     }
 
     fn partial_downloads() -> Vec<String> {
