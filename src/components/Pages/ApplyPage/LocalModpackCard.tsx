@@ -36,6 +36,7 @@ import {
   MdSync,
 } from "react-icons/md";
 import ModpackView from "../../shared/Pages/ModpackView";
+import BrokenModpackNotice from "../../shared/BrokenModpackNotice";
 import CloudMembersPanel from "./CloudMembersPanel";
 import ModpackBadges from "./ModpackBadges";
 import { formatSyncDate } from "./syncDates";
@@ -72,6 +73,8 @@ export default function LocalModpackCard({
   const dateString = t("localSyncDate", {
     date: formatSyncDate(modpack.lastSynced),
   });
+  // The host refuses to change, share or sync a pack it can't read.
+  const broken = modpack.manifestError || null;
   const appliedInstances = prismInstances.filter(
     (instance) => instance.appliedModpack === modpack.name,
   );
@@ -119,6 +122,7 @@ export default function LocalModpackCard({
           </span>
         )}
       </p>
+      {broken !== null && <BrokenModpackNotice error={broken} />}
       {appliedInstances.length > 0 && (
         <p className="text-md text-slate-400">
           {t("prismAppliedTo", {
@@ -168,6 +172,7 @@ export default function LocalModpackCard({
           />
         )}
         <Button
+          disabled={broken !== null}
           onClick={async () => {
             try {
               await shareModpack(modpack.name);
@@ -183,6 +188,7 @@ export default function LocalModpackCard({
           <MdShare className="w-5 h-5 mx-2" />
         </Button>
         <Button
+          disabled={broken !== null}
           onClick={async () => {
             try {
               await pushToCloud(false);
@@ -202,6 +208,7 @@ export default function LocalModpackCard({
           <MdSync className="w-5 h-5 ml-2" />
         </Button>
         <Button
+          disabled={broken !== null}
           onClick={async () => {
             onEdit(modpack);
           }}
@@ -258,6 +265,7 @@ export default function LocalModpackCard({
                   mods={modpack.mods}
                   version={modpack.version}
                   unknownMods={modpack.unknownMods}
+                  manifestError={modpack.manifestError}
                   showBack
                 ></ModpackView>
               ),

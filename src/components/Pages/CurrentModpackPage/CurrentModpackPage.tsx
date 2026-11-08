@@ -63,6 +63,7 @@ export default function CurrentModpackPage() {
             name={currentModpack.name}
             version={currentModpack.version}
             unknownMods={currentModpack.unknownMods}
+            manifestError={currentModpack.manifestError}
           ></ModpackView>
         ) : (
           <div>-</div>

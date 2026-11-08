@@ -132,6 +132,26 @@ describe("ModpackView", () => {
     expect(screen.getAllByTestId("mod")).toHaveLength(20);
   });
 
+  it("explains an unreadable manifest and offers no update check", async () => {
+    render(
+      <ModpackView
+        name="Pack"
+        version="-"
+        modLoader={ModLoader.Unknown}
+        isApplied={false}
+        lastSynced={0}
+        unknownMods={true}
+        mods={[]}
+        manifestError="expected value at line 1"
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "expected value at line 1",
+    );
+    expect(screen.getByRole("button", { name: /update/i })).toBeDisabled();
+  });
+
   it("lets the user hide the update view while the checks still run", async () => {
     let finishCheck!: () => void;
     getModUpdate.mockReturnValue(

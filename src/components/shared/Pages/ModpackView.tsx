@@ -19,6 +19,7 @@ import CircularProgress from "../../core/CircularProgress";
 
 import Button from "../../core/Button";
 import CancelButton from "../../core/CancelButton";
+import BrokenModpackNotice from "../BrokenModpackNotice";
 import { MdPermIdentity, MdUpdate } from "react-icons/md";
 
 type ModpackViewProps = LocalModpack & {
@@ -284,6 +285,7 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
               )}
             </p>
             <Button
+              disabled={!!modpack.manifestError}
               onClick={() => {
                 if (showUpdates) {
                   setShowUpdates(false);
@@ -315,6 +317,9 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
           </div>
         </div>
 
+        {modpack.manifestError && (
+          <BrokenModpackNotice error={modpack.manifestError} />
+        )}
         {showIdentify ? (
           toIdentify.length == 0 ? (
             <div className="bg-slate-800 w-full center h-min p-4 rounded-4xl">

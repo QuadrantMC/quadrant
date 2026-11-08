@@ -46,7 +46,11 @@ function instance(over: Partial<PrismInstance>): PrismInstance {
 }
 
 function renderCard(
-  props: { prismInstances?: PrismInstance[]; onChanged?: () => void } = {},
+  props: {
+    prismInstances?: PrismInstance[];
+    onChanged?: () => void;
+    manifestError?: string | null;
+  } = {},
 ) {
   return render(
     <ContentContext.Provider
@@ -66,6 +70,7 @@ function renderCard(
           lastSynced: 0,
           mods: [],
           unknownMods: false,
+          manifestError: props.manifestError,
         }}
         prismInstances={props.prismInstances}
         onChanged={props.onChanged ?? (() => {})}
@@ -120,6 +125,29 @@ describe("LocalModpackCard", () => {
       expect(exportModpack).toHaveBeenCalledWith("Alpha Pack"),
     );
     expect(setSnackbar).not.toHaveBeenCalled();
+  });
+});
+
+describe("LocalModpackCard with an unreadable manifest", () => {
+  it("says why and locks the actions the host would refuse", async () => {
+    renderCard({ manifestError: "expected value at line 1" });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "can't read this modpack's modConfigV2.json (expected value at line 1)",
+    );
+    for (const name of [/^share$/i, /^sync$/i, /^update$/i]) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    }
+    // Applying, exporting and deleting still work on a broken pack.
+    expect(screen.getByRole("button", { name: /^apply$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^delete$/i })).toBeEnabled();
+  });
+
+  it("shows nothing extra for a readable pack", () => {
+    renderCard({ manifestError: null });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: /^share$/i })).toBeEnabled();
   });
 });
 
