@@ -354,6 +354,7 @@ impl From<ModrinthFile> for UniversalModFile {
             file_name: value.filename,
             download_url: value.url,
             sha1: value.hashes.sha1,
+            sha512: Some(value.hashes.sha512).filter(|hash| !hash.is_empty()),
             size: value.size,
         }
     }
@@ -461,8 +462,10 @@ pub async fn identify_modpack_modrinth(
     for file in unknown_files {
         let original_file_name = file.clone();
         let file = modpack_folder.join(file);
+        let contents = std::fs::read(file)?;
+        let sha512 = super::cache::sha512_hex(&contents);
         let mut hasher = Sha1::new();
-        hasher.update(std::fs::read(file)?);
+        hasher.update(contents);
         let hash = hex::encode(hasher.finalize());
         let res = provider_cached_client()
             .get(format!("{}/v2/version_file/{}", modrinth_api_base(), hash))
@@ -481,11 +484,14 @@ pub async fn identify_modpack_modrinth(
             None => continue,
         };
         mods.push(IdentifiedMod {
-            installed_mod: InstalledMod::minimal(
-                identifier.project_id,
-                ModSource::Modrinth,
-                file.url.clone(),
-            ),
+            installed_mod: InstalledMod {
+                sha512: Some(sha512),
+                ..InstalledMod::minimal(
+                    identifier.project_id,
+                    ModSource::Modrinth,
+                    file.url.clone(),
+                )
+            },
             file_name: original_file_name,
         });
     }

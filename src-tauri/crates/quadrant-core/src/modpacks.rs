@@ -1,5 +1,6 @@
 //! Local modpack filesystem operations and import/export flows.
 
+use crate::mc_mod::cache::file_sha512;
 use crate::{
     Result,
     events::BackendEvent,
@@ -13,6 +14,7 @@ use crate::{
 use anyhow::anyhow;
 use chrono::Utc;
 use futures::StreamExt;
+use sha2::Digest;
 use std::{
     collections::HashSet,
     io::Write,
@@ -88,6 +90,19 @@ pub(crate) fn validate_new_modpack_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether a manifest entry from `source` may download from `host`. Provider
+/// entries come only from that provider's CDN, so a shared or synced pack can
+/// not dress up another host as Modrinth or CurseForge.
+pub fn is_trusted_download_host(source: &ModSource, host: &str) -> bool {
+    match source {
+        ModSource::Modrinth => host == "cdn.modrinth.com",
+        ModSource::CurseForge => matches!(host, "edge.forgecdn.net" | "mediafilez.forgecdn.net"),
+        // Online mods are links the user added, so any HTTPS host is theirs to
+        // pick. Frontends name the host before such a pack is installed.
+        ModSource::Online => true,
+    }
+}
+
 pub(crate) fn safe_download_file_name(download_url: &str, source: &ModSource) -> Result<String> {
     let url = reqwest::Url::parse(download_url)?;
     let scheme_allowed = url.scheme() == "https"
@@ -97,16 +112,8 @@ pub(crate) fn safe_download_file_name(download_url: &str, source: &ModSource) ->
     }
 
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-    let trusted_provider = match source {
-        ModSource::Modrinth => host == "cdn.modrinth.com" || cfg!(test),
-        ModSource::CurseForge => {
-            host == "forgecdn.net" || host.ends_with(".forgecdn.net") || cfg!(test)
-        }
-        // Online mods intentionally support user-provided HTTPS hosts. Their names
-        // still pass the strict path check below, keeping writes inside the pack.
-        ModSource::Online => true,
-    };
-    if !trusted_provider {
+    let trusted = is_trusted_download_host(source, &host) || cfg!(test) && host == "127.0.0.1";
+    if !trusted {
         return Err(anyhow::Error::from(crate::error::ErrorCode::UnsafeDownload));
     }
 
@@ -563,6 +570,14 @@ pub async fn register_mod(
         }
     }
 
+    // The file already in the pack is what this entry installs. A hash sent
+    // along (from identifying a renamed file) only stands in when it is absent.
+    let installed_file = crate::mc_mod::download_file_name(&mod_.download_url)
+        .map(|file_name| modpack_path(mc_folder, modpack_name).join(file_name))
+        .filter(|path| path.is_file());
+    if let Some(path) = installed_file {
+        mod_.sha512 = Some(tokio::task::spawn_blocking(move || file_sha512(&path)).await??);
+    }
     modpack.mods.push(mod_);
 
     write_file_atomically(
@@ -728,48 +743,39 @@ pub async fn install_modpack(
         }
     }
 
-    let mods = mod_config.mods.clone();
     let staging = modpack_folder.join(format!(
         ".quadrant-install-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ));
     std::fs::create_dir(&staging)?;
-
-    let total_mods = mods.len();
-    let downloaded_mods = Arc::new(Mutex::new(0_usize));
-    let mut downloads = Vec::new();
-    for (mod_, file_name) in mods.iter().cloned().zip(expected_file_names.iter()) {
-        let final_path = modpack_folder.join(file_name);
-        // A version may keep its filename while changing its download URL.
-        // Reuse only a file recorded as the same download in the old manifest.
-        if final_path.is_file()
-            && old_mod_config.as_ref().is_some_and(|old| {
-                old.mods.iter().any(|old_mod| {
-                    old_mod.id == mod_.id
-                        && old_mod.source == mod_.source
-                        && old_mod.download_url == mod_.download_url
-                })
-            })
-        {
-            continue;
-        }
-
-        downloads.push(download_mod_concurrently(
-            mod_,
-            staging.join(file_name),
-            settings,
-            event_sink,
-            total_mods,
-            downloaded_mods.clone(),
-        ));
+    let downloaded = download_missing_files(
+        &mut mod_config.mods,
+        &expected_file_names,
+        &modpack_folder,
+        &staging,
+        old_mod_config.as_ref(),
+        settings,
+        event_sink,
+    )
+    .await;
+    if let Err(error) = downloaded {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
     }
 
-    for result in futures::future::join_all(downloads).await {
-        if let Err(error) = result {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(error);
-        }
-    }
+    // Only files the previous manifest tracked go, and the plan is made before
+    // anything moves. Entries from an older URL policy still name their jar.
+    let expected_lowercase: HashSet<_> = expected_file_names
+        .iter()
+        .map(|name| name.to_lowercase())
+        .collect();
+    let obsolete_files: Vec<_> = old_mod_config
+        .iter()
+        .flat_map(|old| &old.mods)
+        .filter_map(|old_mod| crate::mc_mod::download_file_name(&old_mod.download_url))
+        .filter(|old_name| !expected_lowercase.contains(&old_name.to_lowercase()))
+        .map(|old_name| modpack_folder.join(old_name))
+        .collect();
 
     for entry in std::fs::read_dir(&staging)? {
         let entry = entry?;
@@ -777,17 +783,9 @@ pub async fn install_modpack(
     }
     std::fs::remove_dir(&staging)?;
 
-    // Only remove files tracked by the previous manifest. User files and sync
-    // metadata are not part of an install transaction and must be preserved.
-    if let Some(old) = old_mod_config {
-        for old_mod in old.mods {
-            let old_name = safe_download_file_name(&old_mod.download_url, &old_mod.source)?;
-            if !expected_file_names.contains(&old_name) {
-                let old_path = modpack_folder.join(old_name);
-                if old_path.is_file() {
-                    std::fs::remove_file(old_path)?;
-                }
-            }
+    for old_path in obsolete_files {
+        if old_path.is_file() {
+            std::fs::remove_file(old_path)?;
         }
     }
 
@@ -870,6 +868,64 @@ fn write_export_archive(
     Ok(())
 }
 
+/// Fills `staging` with every entry's file that the pack folder does not
+/// already hold, and records each entry's `sha512`. An entry that carries one
+/// must match it, or nothing is installed.
+async fn download_missing_files(
+    mods: &mut [InstalledMod],
+    file_names: &[String],
+    modpack_folder: &Path,
+    staging: &Path,
+    old_mod_config: Option<&InstalledModpack>,
+    settings: &impl SettingsStore,
+    event_sink: &impl EventSink,
+) -> Result<()> {
+    let total_mods = mods.len();
+    let downloaded_mods = Arc::new(Mutex::new(0_usize));
+    let mut downloads = Vec::new();
+    for (index, (mod_, file_name)) in mods.iter_mut().zip(file_names).enumerate() {
+        let final_path = modpack_folder.join(file_name);
+        // A version may keep its filename while changing its download URL.
+        // Reuse only a file recorded as the same download in the old manifest.
+        let same_download = old_mod_config.is_some_and(|old| {
+            old.mods.iter().any(|old_mod| {
+                old_mod.id == mod_.id
+                    && old_mod.source == mod_.source
+                    && old_mod.download_url == mod_.download_url
+            })
+        });
+        if same_download && final_path.is_file() {
+            let local_hash =
+                tokio::task::spawn_blocking(move || file_sha512(&final_path)).await??;
+            match &mod_.sha512 {
+                Some(expected) if !expected.eq_ignore_ascii_case(&local_hash) => {}
+                _ => {
+                    mod_.sha512 = Some(local_hash);
+                    continue;
+                }
+            }
+        }
+
+        let download = download_mod_concurrently(
+            mod_.clone(),
+            staging.join(file_name),
+            settings,
+            event_sink,
+            total_mods,
+            downloaded_mods.clone(),
+        );
+        downloads.push(async move { download.await.map(|hash| (index, hash)) });
+    }
+
+    for (index, hash) in futures::future::try_join_all(downloads).await? {
+        mods[index].sha512 = Some(hash);
+    }
+    Ok(())
+}
+
+/// Streams one entry's file to `file` and returns its SHA-512, failing with
+/// [`ErrorCode::Checksum`](crate::error::ErrorCode::Checksum) when the entry
+/// records a different one.
 async fn download_mod_concurrently(
     mod_: InstalledMod,
     file: PathBuf,
@@ -877,13 +933,24 @@ async fn download_mod_concurrently(
     event_sink: &impl EventSink,
     total_mods: usize,
     downloaded_mods: Arc<Mutex<usize>>,
-) -> Result<()> {
+) -> Result<String> {
     safe_download_file_name(&mod_.download_url, &mod_.source)?;
     let response = reqwest::get(&mod_.download_url).await?.error_for_status()?;
     let mut bytes = response.bytes_stream();
     let mut file = std::fs::File::create(file)?;
+    let mut hasher = sha2::Sha512::new();
     while let Some(item) = bytes.next().await {
-        file.write_all(&item?)?;
+        let item = item?;
+        hasher.update(&item);
+        file.write_all(&item)?;
+    }
+    let hash = hex::encode(hasher.finalize());
+    if mod_
+        .sha512
+        .as_ref()
+        .is_some_and(|expected| !expected.eq_ignore_ascii_case(&hash))
+    {
+        return Err(anyhow::Error::from(crate::error::ErrorCode::Checksum));
     }
 
     let current_key = match mod_.source {
@@ -901,7 +968,7 @@ async fn download_mod_concurrently(
     event_sink.publish(BackendEvent::ModpackDownloadProgress(
         *downloaded as f64 / total_mods as f64,
     ))?;
-    Ok(())
+    Ok(hash)
 }
 
 #[cfg(test)]
@@ -998,6 +1065,7 @@ mod tests {
             description: String::new(),
             license: String::new(),
             mod_icon_url: String::new(),
+            sha512: None,
         }
     }
 
@@ -1142,6 +1210,7 @@ mod tests {
                     description: String::new(),
                     license: String::new(),
                     mod_icon_url: String::new(),
+                    sha512: None,
                 }],
             },
             &store,
@@ -1152,6 +1221,15 @@ mod tests {
 
         mod_jar.assert();
         assert!(modpack_path(&mc_folder, "alpha").join("mod.jar").exists());
+        let installed: InstalledModpack = serde_json::from_slice(
+            &std::fs::read(modpack_path(&mc_folder, "alpha").join("modConfigV2.json")).unwrap(),
+        )
+        .unwrap();
+        // An entry shared without a hash gets the one of the bytes written.
+        assert_eq!(
+            installed.mods[0].sha512,
+            Some(crate::mc_mod::cache::sha512_hex(b"mod-bytes"))
+        );
         assert_eq!(store.get_i64("modrinthUsage").unwrap(), Some(1));
         assert!(
             events
@@ -1316,6 +1394,236 @@ mod tests {
                 None
             )
             .is_err()
+        );
+    }
+
+    fn read_manifest(mc_folder: &Path, name: &str) -> InstalledModpack {
+        serde_json::from_slice(
+            &std::fs::read(modpack_path(mc_folder, name).join("modConfigV2.json")).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn seed_pack(mc_folder: &Path, mods: Vec<InstalledMod>, files: &[(&str, &str)]) -> String {
+        let folder = modpack_path(mc_folder, "alpha");
+        std::fs::create_dir_all(&folder).unwrap();
+        let manifest = serde_json::to_string_pretty(&InstalledModpack {
+            mod_config_version: "2".to_string(),
+            quadrant_version: String::new(),
+            name: "alpha".to_string(),
+            version: "1.20.1".to_string(),
+            mod_loader: ModLoader::Fabric,
+            mods,
+        })
+        .unwrap();
+        std::fs::write(folder.join("modConfigV2.json"), &manifest).unwrap();
+        for (name, contents) in files {
+            std::fs::write(folder.join(name), contents).unwrap();
+        }
+        manifest
+    }
+
+    fn incoming(mods: Vec<InstalledMod>) -> InstalledModpack {
+        InstalledModpack {
+            mod_config_version: "2".to_string(),
+            quadrant_version: String::new(),
+            name: "alpha".to_string(),
+            version: "1.20.1".to_string(),
+            mod_loader: ModLoader::Fabric,
+            mods,
+        }
+    }
+
+    fn hashed(mod_: InstalledMod, contents: &[u8]) -> InstalledMod {
+        InstalledMod {
+            sha512: Some(crate::mc_mod::cache::sha512_hex(contents)),
+            ..mod_
+        }
+    }
+
+    #[tokio::test]
+    async fn a_file_that_fails_its_hash_leaves_the_existing_pack_untouched() {
+        let server = MockServer::start();
+        let tampered = server.mock(|when, then| {
+            when.method(GET).path("/new.jar");
+            then.status(200).body("tampered bytes");
+        });
+        let (_dir, mc_folder) = setup_mc_folder();
+        let old = online_mod("old", "https://example.invalid/old.jar".to_string());
+        let manifest = seed_pack(&mc_folder, vec![old.clone()], &[("old.jar", "old")]);
+        let new = online_mod("new", format!("{}/new.jar", server.base_url()));
+
+        let error = install_modpack(
+            &mc_folder,
+            incoming(vec![hashed(new, b"expected bytes")]),
+            &MemoryStore::default(),
+            &CollectingEvents::default(),
+        )
+        .await
+        .unwrap_err();
+
+        tampered.assert();
+        assert_eq!(
+            crate::error::user_facing(error).to_string(),
+            "errorChecksum"
+        );
+        let folder = modpack_path(&mc_folder, "alpha");
+        assert_eq!(
+            std::fs::read_to_string(folder.join("modConfigV2.json")).unwrap(),
+            manifest
+        );
+        assert!(folder.join("old.jar").exists());
+        assert!(!folder.join("new.jar").exists());
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 2);
+    }
+
+    #[tokio::test]
+    async fn install_modpack_verifies_hashes_and_records_reused_files() {
+        let server = MockServer::start();
+        let fresh = server.mock(|when, then| {
+            when.method(GET).path("/fresh.jar");
+            then.status(200).body("fresh bytes");
+        });
+        let replaced = server.mock(|when, then| {
+            when.method(GET).path("/kept.jar");
+            then.status(200).body("kept bytes");
+        });
+        let (_dir, mc_folder) = setup_mc_folder();
+        let reused = online_mod("reused", format!("{}/reused.jar", server.base_url()));
+        let kept = online_mod("kept", format!("{}/kept.jar", server.base_url()));
+        seed_pack(
+            &mc_folder,
+            vec![reused.clone(), kept.clone()],
+            &[
+                ("reused.jar", "reused bytes"),
+                ("kept.jar", "locally changed"),
+            ],
+        );
+        let fresh_mod = online_mod("fresh", format!("{}/fresh.jar", server.base_url()));
+
+        install_modpack(
+            &mc_folder,
+            incoming(vec![
+                reused,
+                hashed(kept, b"kept bytes"),
+                hashed(fresh_mod, b"fresh bytes"),
+            ]),
+            &MemoryStore::default(),
+            &CollectingEvents::default(),
+        )
+        .await
+        .unwrap();
+
+        fresh.assert();
+        // The file on disk no longer matches the hash the pack names.
+        replaced.assert();
+        let installed = read_manifest(&mc_folder, "alpha");
+        let hashes: Vec<_> = installed
+            .mods
+            .iter()
+            .map(|mod_| mod_.sha512.clone().unwrap())
+            .collect();
+        assert_eq!(
+            hashes,
+            [b"reused bytes".as_slice(), b"kept bytes", b"fresh bytes"]
+                .map(crate::mc_mod::cache::sha512_hex)
+        );
+        assert_eq!(
+            std::fs::read(modpack_path(&mc_folder, "alpha").join("kept.jar")).unwrap(),
+            b"kept bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn install_modpack_removes_obsolete_files_named_under_an_older_url_policy() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        let legacy = online_mod("legacy", "http://example.invalid/legacy.jar".to_string());
+        seed_pack(&mc_folder, vec![legacy], &[("legacy.jar", "legacy")]);
+
+        install_modpack(
+            &mc_folder,
+            incoming(Vec::new()),
+            &MemoryStore::default(),
+            &CollectingEvents::default(),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !modpack_path(&mc_folder, "alpha")
+                .join("legacy.jar")
+                .exists()
+        );
+        assert!(read_manifest(&mc_folder, "alpha").mods.is_empty());
+    }
+
+    #[tokio::test]
+    async fn register_mod_records_the_hash_of_the_file_in_the_pack() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        create_modpack(&mc_folder, &[], "alpha", "1.20.1", ModLoader::Fabric).unwrap();
+        std::fs::write(modpack_path(&mc_folder, "alpha").join("found.jar"), "found").unwrap();
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        let identified = |id: &str, file: &str| InstalledMod {
+            sha512: Some("sent along".to_string()),
+            ..online_mod(id, format!("https://example.invalid/{file}"))
+        };
+
+        register_mod(
+            &mc_folder,
+            &listed,
+            identified("found", "found.jar"),
+            "alpha",
+        )
+        .await
+        .unwrap();
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        register_mod(
+            &mc_folder,
+            &listed,
+            identified("renamed", "gone.jar"),
+            "alpha",
+        )
+        .await
+        .unwrap();
+
+        let mods = read_manifest(&mc_folder, "alpha").mods;
+        assert_eq!(
+            mods[0].sha512,
+            Some(crate::mc_mod::cache::sha512_hex(b"found"))
+        );
+        assert_eq!(mods[1].sha512.as_deref(), Some("sent along"));
+    }
+
+    #[test]
+    fn provider_entries_download_only_from_their_cdn() {
+        let trusted = [
+            (ModSource::Modrinth, "cdn.modrinth.com"),
+            (ModSource::CurseForge, "edge.forgecdn.net"),
+            (ModSource::CurseForge, "mediafilez.forgecdn.net"),
+            (ModSource::Online, "example.com"),
+        ];
+        for (source, host) in trusted {
+            assert!(is_trusted_download_host(&source, host), "{source:?} {host}");
+        }
+        let untrusted = [
+            (ModSource::Modrinth, "evil.example"),
+            (ModSource::Modrinth, "cdn.modrinth.com.evil.example"),
+            (ModSource::Modrinth, "edge.forgecdn.net"),
+            (ModSource::CurseForge, "evil.forgecdn.net"),
+            (ModSource::CurseForge, "cdn.modrinth.com"),
+        ];
+        for (source, host) in untrusted {
+            assert!(
+                !is_trusted_download_host(&source, host),
+                "{source:?} {host}"
+            );
+        }
+        assert!(
+            safe_download_file_name("https://evil.example/sodium.jar", &ModSource::Modrinth)
+                .is_err()
+        );
+        assert!(
+            safe_download_file_name("https://evil.example/sodium.jar", &ModSource::Online).is_ok()
         );
     }
 

@@ -71,6 +71,10 @@ pub struct InstalledMod {
     pub mod_icon_url: String,
     /// URL of the installed file that was selected for this mod.
     pub download_url: String,
+    /// Lowercase hex SHA-512 of the file as installed. Manifests, shares and
+    /// synced packs from older versions have none, so it stays optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha512: Option<String>,
 }
 
 impl InstalledMod {
@@ -104,6 +108,17 @@ impl InstalledMod {
             description: String::new(),
             license: String::new(),
             mod_icon_url: String::new(),
+            sha512: None,
+        }
+    }
+
+    /// The name a warning shows for this entry, which may never have been
+    /// enriched with one.
+    pub fn display_name(&self) -> &str {
+        if self.name.is_empty() {
+            &self.id
+        } else {
+            &self.name
         }
     }
 }
@@ -615,8 +630,10 @@ mod tests {
             license: "LGPL-3.0".to_string(),
             mod_icon_url: "https://example.invalid/icon.png".to_string(),
             download_url: "https://cdn.modrinth.com/sodium.jar".to_string(),
+            sha512: None,
         };
         let value = serde_json::to_value(&mod_).unwrap();
+        assert!(value.get("sha512").is_none());
         assert_eq!(value["downloadCount"], json!(7));
         assert_eq!(value["modType"], json!("Mod"));
         assert_eq!(
@@ -651,6 +668,16 @@ mod tests {
         assert_eq!(mod_.name, "");
         assert_eq!(mod_.download_count, 0);
         assert!(mod_.thumbnail_urls.is_empty());
+        assert_eq!(mod_.sha512, None);
+
+        let hashed = InstalledMod {
+            sha512: Some("ab".repeat(64)),
+            ..mod_
+        };
+        let value = serde_json::to_value(&hashed).unwrap();
+        assert_eq!(value["sha512"], json!("ab".repeat(64)));
+        let round_tripped: InstalledMod = serde_json::from_value(value).unwrap();
+        assert_eq!(round_tripped.sha512, hashed.sha512);
     }
 
     #[test]

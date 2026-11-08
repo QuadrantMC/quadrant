@@ -1,6 +1,9 @@
 //! Local file cache utilities used by mod downloads.
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
 
 use chrono::prelude::*;
 use once_cell::sync::Lazy;
@@ -92,6 +95,37 @@ pub fn file_hash(file_bytes: &[u8]) -> String {
     hasher.update(file_bytes);
     let hash = hasher.finalize();
     hex::encode(hash)
+}
+
+/// Lowercase hex SHA-512 of a payload, the `sha512` a modpack entry records.
+pub fn sha512_hex(bytes: &[u8]) -> String {
+    hex::encode(sha2::Sha512::digest(bytes))
+}
+
+/// Copies `reader` into `writer` and returns the lowercase hex SHA-512 of the
+/// bytes copied, so a file is hashed exactly as it is written.
+pub(crate) fn copy_hashing(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+) -> std::io::Result<String> {
+    let mut hasher = sha2::Sha512::new();
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        hasher.update(&buffer[..read]);
+        writer.write_all(&buffer[..read])?;
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Lowercase hex SHA-512 of a file on disk, read in chunks.
+pub(crate) fn file_sha512(path: &Path) -> std::io::Result<String> {
+    copy_hashing(&mut std::fs::File::open(path)?, &mut std::io::sink())
 }
 
 /// Looks up a cached file by content hash.

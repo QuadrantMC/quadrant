@@ -17,7 +17,7 @@ use crate::{
     ports::{EventSink, SettingsStore},
 };
 
-use cache::{add_cache_index, file_hash, get_cache_index, init_cache};
+use cache::{add_cache_index, copy_hashing, file_hash, get_cache_index, init_cache, sha512_hex};
 #[cfg(feature = "curseforge")]
 use curseforge::{
     download_mod_curseforge, get_latest_mod_version_curseforge, search_mods_curseforge,
@@ -170,8 +170,25 @@ pub struct UniversalModFile {
     pub download_url: String,
     /// Expected SHA-1 file hash.
     pub sha1: String,
+    /// Expected SHA-512 file hash, which only Modrinth publishes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha512: Option<String>,
     /// Expected file size in bytes.
     pub size: u64,
+}
+
+impl UniversalModFile {
+    /// Whether `bytes` are this file. Every provider file names at least one
+    /// hash, so a file without any is refused rather than trusted.
+    fn matches(&self, bytes: &[u8]) -> bool {
+        let sha1_matches =
+            self.sha1.is_empty() || file_hash(bytes).eq_ignore_ascii_case(&self.sha1);
+        let sha512_matches = self
+            .sha512
+            .as_ref()
+            .is_none_or(|expected| sha512_hex(bytes).eq_ignore_ascii_case(expected));
+        (!self.sha1.is_empty() || self.sha512.is_some()) && sha1_matches && sha512_matches
+    }
 }
 
 /// Cross-provider search input used by the host API surface.
@@ -661,13 +678,14 @@ pub async fn get_file(
     event_sink: &impl EventSink,
 ) -> Result<(PathBuf, String)> {
     ensure_downloadable(&file)?;
+    if file.sha1.is_empty() && file.sha512.is_none() {
+        return Err(anyhow::Error::from(crate::error::ErrorCode::Checksum));
+    }
 
     if let Some(cached_file) = get_cache_index(file.sha1.clone()).await? {
         log::info!("Cache hit for mod {id} (sha1={})", file.sha1);
         match std::fs::read(&cached_file.file_name) {
-            Ok(cached_file_bytes)
-                if file_hash(&cached_file_bytes).eq_ignore_ascii_case(&file.sha1) =>
-            {
+            Ok(cached_file_bytes) if file.matches(&cached_file_bytes) => {
                 let file_path = add_cache_index(
                     file.file_name.clone(),
                     cached_file_bytes.as_slice(),
@@ -729,10 +747,10 @@ pub async fn get_file(
             progress,
         }))?;
     }
-    let hash = file_hash(file_bytes.as_slice());
-    if !file.sha1.is_empty() && !hash.eq_ignore_ascii_case(&file.sha1) {
+    if !file.matches(&file_bytes) {
         return Err(anyhow::Error::from(crate::error::ErrorCode::Checksum));
     }
+    let hash = file_hash(file_bytes.as_slice());
     let file_path = add_cache_index(file.file_name.clone(), &file_bytes, hash).await?;
     event_sink.publish(BackendEvent::ModDownloadProgress(ModProgressPayload {
         mod_id: id,
@@ -746,7 +764,7 @@ pub async fn get_file(
 /// Lenient on purpose, unlike `crate::modpacks::safe_download_file_name`: an
 /// entry written under an older URL policy must still resolve to the jar it
 /// created, so it can be removed.
-fn download_file_name(download_url: &str) -> Option<String> {
+pub(crate) fn download_file_name(download_url: &str) -> Option<String> {
     reqwest::Url::parse(download_url)
         .ok()
         .and_then(|url| url.path_segments()?.next_back().map(ToOwned::to_owned))
@@ -762,6 +780,8 @@ fn download_file_name(download_url: &str) -> Option<String> {
 }
 
 /// Installs an already-downloaded file into a modpack or game content folder.
+///
+/// A modpack entry records the SHA-512 of the bytes written.
 pub fn install_local_file(
     mc_folder: &Path,
     file: PathBuf,
@@ -772,6 +792,7 @@ pub fn install_local_file(
     let id = local_mod.id.clone();
     let source = local_mod.source.clone();
     let target_file_name = download_file_name(&local_mod.download_url)
+        .filter(|name| crate::models::is_portable_file_name(name))
         .ok_or_else(|| anyhow::Error::from(crate::error::ErrorCode::UnsafeDownload))?;
     let _manifest_guard = if mod_type == ModType::Mod {
         Some(
@@ -783,7 +804,7 @@ pub fn install_local_file(
         None
     };
 
-    let (target_path, updated_modpack, manifest_path, old_file_paths) = match mod_type {
+    let (target_path, mut updated_modpack, manifest_path, old_file_paths) = match mod_type {
         ModType::Mod => {
             let modpack_name = modpack.ok_or_else(|| anyhow!("modpackRequired"))?;
             crate::modpacks::validate_modpack_name(&modpack_name)?;
@@ -837,8 +858,23 @@ pub fn install_local_file(
     if let Some(parent) = target_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // Writing through a link would replace whatever file it points at.
+    if target_path.is_symlink() {
+        return Err(anyhow::Error::from(crate::error::ErrorCode::FileAccess));
+    }
+    let mut source_file = std::fs::File::open(file)?;
+    let mut sha512 = String::new();
+    crate::modpacks::write_atomically(&target_path, |target| {
+        sha512 = copy_hashing(&mut source_file, target)?;
+        Ok(())
+    })?;
+    if let Some(entry) = updated_modpack
+        .as_mut()
+        .and_then(|modpack| modpack.mods.last_mut())
+    {
+        entry.sha512 = Some(sha512);
+    }
     log::info!("Installed mod {id} ({mod_type:?}) from {source:?}");
-    std::fs::copy(file, &target_path)?;
     // Compare resolved paths: on a case-insensitive filesystem `Sodium.jar`
     // and `sodium.jar` are the jar that was just written.
     let installed_path = std::fs::canonicalize(&target_path)?;
@@ -1031,6 +1067,69 @@ mod tests {
             std::fs::read_to_string(dir.path().join("modpacks/alpha/my mod.jar")).unwrap(),
             "mod bytes"
         );
+        let expected = Some(cache::sha512_hex(b"mod bytes"));
+        assert_eq!(updated.mods[0].sha512, expected);
+        let saved: InstalledModpack = serde_json::from_slice(
+            &std::fs::read(dir.path().join("modpacks/alpha/modConfigV2.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved.mods[0].sha512, expected);
+        // The copy goes through a temp file that does not outlive it.
+        let mut names: Vec<_> = std::fs::read_dir(dir.path().join("modpacks/alpha"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["modConfigV2.json", "my mod.jar"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_local_file_never_writes_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::modpacks::create_modpack(dir.path(), &[], "alpha", "1.20.1", ModLoader::Fabric)
+            .unwrap();
+        let elsewhere = dir.path().join("elsewhere.txt");
+        std::fs::write(&elsewhere, "keep").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join("modpacks/alpha/mod.jar")).unwrap();
+        let source_file = dir.path().join("download.jar");
+        std::fs::write(&source_file, "mod bytes").unwrap();
+
+        assert!(
+            install_local_file(
+                dir.path(),
+                source_file,
+                InstalledMod::minimal(
+                    "mod".to_string(),
+                    ModSource::Online,
+                    "https://example.invalid/mod.jar".to_string(),
+                ),
+                ModType::Mod,
+                Some("alpha".to_string()),
+            )
+            .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(elsewhere).unwrap(), "keep");
+    }
+
+    #[test]
+    fn a_provider_file_must_match_every_hash_it_names() {
+        let file = |sha1: &str, sha512: Option<String>| UniversalModFile {
+            id: None,
+            file_name: "mod.jar".to_string(),
+            download_url: "https://cdn.modrinth.com/mod.jar".to_string(),
+            sha1: sha1.to_string(),
+            sha512,
+            size: 3,
+        };
+        let sha1 = file_hash(b"jar");
+        let sha512 = Some(cache::sha512_hex(b"jar"));
+        assert!(file(&sha1, None).matches(b"jar"));
+        assert!(file("", sha512.clone()).matches(b"jar"));
+        assert!(file(&sha1, sha512.clone()).matches(b"jar"));
+        assert!(!file(&sha1, Some(cache::sha512_hex(b"other"))).matches(b"jar"));
+        assert!(!file(&file_hash(b"other"), sha512).matches(b"jar"));
+        assert!(!file("", None).matches(b"jar"));
     }
 
     fn seed_modpack(mc_folder: &Path, name: &str, mods: Vec<InstalledMod>) {
@@ -1465,6 +1564,7 @@ mod tests {
             file_name: "Faithful.zip".to_string(),
             download_url: format!("{}/Faithful.zip", server.base_url()),
             sha1: crate::mc_mod::cache::file_hash(bytes),
+            sha512: None,
             size: bytes.len() as u64,
         };
         let events = CollectingEvents::default();
@@ -1576,6 +1676,7 @@ mod tests {
                 file_name: "mod.jar".to_string(),
                 download_url: format!("{}/mod.jar", server.base_url()),
                 sha1,
+                sha512: None,
                 size: bytes.len() as u64,
             },
             "mod".to_string(),
@@ -1603,6 +1704,7 @@ mod tests {
                 file_name: "refused.jar".to_string(),
                 download_url: format!("{}/refused.jar", server.base_url()),
                 sha1: "0000000000000000000000000000000000000000".to_string(),
+                sha512: None,
                 size: 1,
             },
             "mod".to_string(),
@@ -1627,6 +1729,7 @@ mod tests {
                 file_name: "mod.jar".to_string(),
                 download_url: String::new(),
                 sha1: String::new(),
+                sha512: None,
                 size: 0,
             },
             "mod".to_string(),
@@ -1637,5 +1740,46 @@ mod tests {
 
         assert_eq!(error.to_string(), "thirdPartyDownloadDisabled");
         assert!(events.events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_file_refuses_a_file_with_no_hash_and_a_wrong_sha512() {
+        let _guard = crate::mc_mod::cache::tests::set_cache_dir();
+        let server = httpmock::MockServer::start();
+        let download = server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/mod.jar");
+            then.status(200).body("tampered");
+        });
+        let file = |sha1: &str, sha512: Option<String>| UniversalModFile {
+            id: None,
+            file_name: "mod.jar".to_string(),
+            download_url: format!("{}/mod.jar", server.base_url()),
+            sha1: sha1.to_string(),
+            sha512,
+            size: 8,
+        };
+
+        let error = get_file(
+            file("", None),
+            "mod".to_string(),
+            &CollectingEvents::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "errorChecksum");
+        download.assert_calls(0);
+
+        let error = get_file(
+            file(
+                &file_hash(b"tampered"),
+                Some(cache::sha512_hex(b"original")),
+            ),
+            "mod".to_string(),
+            &CollectingEvents::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "errorChecksum");
+        download.assert_calls(1);
     }
 }

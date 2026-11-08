@@ -92,6 +92,7 @@ impl TryFrom<ModFile> for UniversalModFile {
                 .find(|hash| hash.algo == 1)
                 .map(|hash| hash.value.clone())
                 .unwrap_or_default(),
+            sha512: None,
             size: value.file_length,
         })
     }
@@ -568,6 +569,7 @@ pub async fn identify_modpack_curseforge(
         let file = modpack_folder.join(file);
         let contents = get_jar_contents(file.to_string_lossy().as_ref());
         let hash = compute_hash(&contents);
+        let sha512 = super::cache::sha512_hex(&contents);
         let mut hasher = sha1::Sha1::new();
         hasher.update(contents);
         let sha1 = hex::encode(hasher.finalize());
@@ -575,6 +577,7 @@ pub async fn identify_modpack_curseforge(
             hash,
             sha1,
             file.file_name().unwrap().to_string_lossy().to_string(),
+            sha512,
         ));
     }
 
@@ -612,10 +615,10 @@ pub async fn identify_modpack_curseforge(
         let Some(hash) = file.hashes.iter().find(|hash| hash.algo == 1) else {
             continue;
         };
-        let Some(original_file) = hashes
+        let Some((original_file, sha512)) = hashes
             .iter()
-            .find(|(_, sha1, _)| sha1 == &hash.value)
-            .map(|hash_info| hash_info.2.clone())
+            .find(|(_, sha1, _, _)| sha1 == &hash.value)
+            .map(|hash_info| (hash_info.2.clone(), hash_info.3.clone()))
         else {
             continue;
         };
@@ -623,11 +626,14 @@ pub async fn identify_modpack_curseforge(
             continue;
         };
         mods.push(IdentifiedMod {
-            installed_mod: InstalledMod::minimal(
-                file.mod_id.to_string(),
-                ModSource::CurseForge,
-                download_url,
-            ),
+            installed_mod: InstalledMod {
+                sha512: Some(sha512),
+                ..InstalledMod::minimal(
+                    file.mod_id.to_string(),
+                    ModSource::CurseForge,
+                    download_url,
+                )
+            },
             file_name: original_file,
         });
     }
