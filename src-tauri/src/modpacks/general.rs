@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use quadrant_core::ports::Shell;
 use quadrant_host::QuadrantHost;
@@ -68,43 +68,61 @@ pub async fn export_modpack_to(
 ) -> Result<(), tauri::Error> {
     // The save dialog runs in the webview, so this path comes from there.
     // Only an archive may be written, never any file the renderer names.
-    let destination = PathBuf::from(destination);
-    if !is_export_archive_path(&destination) {
+    let Some(destination) = export_archive_path(PathBuf::from(destination)) else {
         return Err(crate::command_error(anyhow::anyhow!(
             "an export must be saved as a .zip file"
         )));
-    }
+    };
     app.state::<QuadrantHost>()
         .export_modpack_to(modpack, destination)
         .await
         .map_err(crate::command_error)
 }
 
-fn is_export_archive_path(path: &Path) -> bool {
-    path.extension()
+/// `path` if it names a `.zip` file, else `path` with `.zip` added, the way
+/// the save dialog would have if it had a filter. `None` when `path` names no
+/// file at all.
+fn export_archive_path(path: PathBuf) -> Option<PathBuf> {
+    let is_archive = path
+        .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
-        && path.file_stem().is_some_and(|stem| !stem.is_empty())
+        && path.file_stem().is_some_and(|stem| !stem.is_empty());
+    if is_archive {
+        return Some(path);
+    }
+    path.file_name()?;
+    let mut archive = path.into_os_string();
+    archive.push(".zip");
+    Some(archive.into())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_export_archive_path;
-    use std::path::Path;
+    use super::export_archive_path;
+    use std::path::PathBuf;
 
     #[test]
     fn exports_are_written_only_to_zip_files() {
-        for accepted in ["C:\\Users\\a\\Pack.quadrantExport.zip", "/home/a/pack.ZIP"] {
-            assert!(is_export_archive_path(Path::new(accepted)), "{accepted}");
-        }
-        for refused in [
-            "C:\\Users\\a\\.bashrc",
-            "/home/a/.profile",
-            "/home/a/pack.zip.sh",
-            "/home/a/zip",
-            "/home/a/.zip",
-            "",
+        for (chosen, written) in [
+            (
+                "C:\\Users\\a\\Pack.quadrantExport.zip",
+                "C:\\Users\\a\\Pack.quadrantExport.zip",
+            ),
+            ("/home/a/pack.ZIP", "/home/a/pack.ZIP"),
+            ("/home/a/mypack", "/home/a/mypack.zip"),
+            ("C:\\Users\\a\\.bashrc", "C:\\Users\\a\\.bashrc.zip"),
+            ("/home/a/.profile", "/home/a/.profile.zip"),
+            ("/home/a/pack.zip.sh", "/home/a/pack.zip.sh.zip"),
+            ("/home/a/.zip", "/home/a/.zip.zip"),
         ] {
-            assert!(!is_export_archive_path(Path::new(refused)), "{refused}");
+            assert_eq!(
+                export_archive_path(PathBuf::from(chosen)),
+                Some(PathBuf::from(written)),
+                "{chosen}"
+            );
+        }
+        for refused in ["", "/", "/home/a/.."] {
+            assert_eq!(export_archive_path(PathBuf::from(refused)), None, "{refused}");
         }
     }
 }
