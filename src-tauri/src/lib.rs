@@ -657,7 +657,32 @@ async fn is_autoupdate_enabled(app: tauri::AppHandle) -> Result<bool, tauri::Err
     let state = state.lock().await;
     Ok(state.is_update_enabled)
 }
-async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
+
+/// Checks for an update and downloads it. A failed check or download sets the
+/// title bar's progress back to 0, which the renderer reads as "ended without
+/// an update", instead of leaving a stalled bar behind.
+async fn check_update(app: tauri::AppHandle) -> Result<(), anyhow::Error> {
+    let emitter = app.clone();
+    reset_progress_on_failure(download_update(app), move || {
+        emitter.emit("updateDownloadProgress", 0)
+    })
+    .await
+}
+
+async fn reset_progress_on_failure<T>(
+    work: impl std::future::Future<Output = Result<T, anyhow::Error>>,
+    reset: impl FnOnce() -> tauri::Result<()>,
+) -> Result<T, anyhow::Error> {
+    let result = work.await;
+    if result.is_err()
+        && let Err(error) = reset()
+    {
+        log::warn!("Failed to reset the update progress: {error}");
+    }
+    result
+}
+
+async fn download_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
     #[cfg(feature = "updater")]
     {
         use quadrant_host::updates::{API_BASE, Channel, Platform};
@@ -877,6 +902,29 @@ mod tests {
         arg.occurrences = 1;
         matches.args.insert(name.to_string(), arg);
         matches
+    }
+
+    #[test]
+    fn a_failed_update_download_resets_the_progress() {
+        let resets = std::cell::Cell::new(0);
+        let reset = || {
+            resets.set(resets.get() + 1);
+            Ok(())
+        };
+
+        let failed = tauri::async_runtime::block_on(reset_progress_on_failure(
+            async { Err::<(), _>(anyhow::anyhow!("connection reset")) },
+            reset,
+        ));
+        assert!(failed.is_err());
+        assert_eq!(resets.get(), 1);
+
+        let finished = tauri::async_runtime::block_on(reset_progress_on_failure(
+            async { Ok(()) },
+            reset,
+        ));
+        assert!(finished.is_ok());
+        assert_eq!(resets.get(), 1);
     }
 
     /// The plugin reports every declared flag, using `Bool(false)` for the ones
