@@ -12,16 +12,14 @@ use sha1::Digest;
 
 use crate::{
     Result,
-    models::{InstalledMod, LocalModpack, ModLoader, ModSource},
-    modpacks::get_modpacks,
+    models::{InstalledMod, ModLoader, ModSource},
     ports::{EventSink, SettingsStore},
 };
 
 use super::{
     GetModArgs, IdentifiedMod, Mod, ModType, SearchCategory, SearchModsArgs, UniversalModFile,
-    get_file, get_mod_url,
+    UnknownJar, get_file, get_mod_url,
 };
-use crate::mc_mod::curseforge_fingerprint::*;
 use crate::mc_mod::http::{provider_cached_client, provider_http_client};
 
 pub(crate) fn curseforge_api_base() -> String {
@@ -525,63 +523,10 @@ pub async fn download_mod_curseforge(
     get_file(file, id, event_sink).await
 }
 
-pub async fn identify_modpack_curseforge(
-    mc_folder: &PathBuf,
-    modpack: String,
-) -> Result<Vec<IdentifiedMod>> {
-    log::info!("Identifying CurseForge mods in modpack \"{modpack}\"");
-    let modpack_folder = mc_folder.join("modpacks").join(&modpack);
-    let existing_modpack: Vec<LocalModpack> = get_modpacks(mc_folder, false)
-        .await?
-        .into_iter()
-        .filter(|existing| existing.name == modpack)
-        .collect();
-    if existing_modpack.is_empty() {
-        return Err(anyhow::Error::from(crate::error::ErrorCode::ModpackMissing));
-    }
-    let existing_modpack = existing_modpack.first().unwrap();
-    let existing_files: Vec<String> = existing_modpack
-        .mods
-        .iter()
-        .map(|mod_| {
-            urlencoding::decode(&mod_.download_url)
-                .unwrap_or_default()
-                .to_string()
-                .split('/')
-                .last()
-                .unwrap_or_default()
-                .to_string()
-        })
-        .collect();
-    let unknown_files: Vec<String> = std::fs::read_dir(&modpack_folder)?
-        .filter(|file| match file {
-            Ok(file) => {
-                let file_name = file.file_name().to_string_lossy().to_string();
-                !existing_files.contains(&file_name) && file_name.ends_with(".jar")
-            }
-            Err(_) => false,
-        })
-        .map(|file| file.unwrap().file_name().to_string_lossy().to_string())
-        .collect();
-
-    let mut hashes = Vec::new();
-    for file in unknown_files {
-        let file = modpack_folder.join(file);
-        let contents = get_jar_contents(file.to_string_lossy().as_ref());
-        let hash = compute_hash(&contents);
-        let sha512 = super::cache::sha512_hex(&contents);
-        let mut hasher = sha1::Sha1::new();
-        hasher.update(contents);
-        let sha1 = hex::encode(hasher.finalize());
-        hashes.push((
-            hash,
-            sha1,
-            file.file_name().unwrap().to_string_lossy().to_string(),
-            sha512,
-        ));
-    }
-
-    let fingerprints: Vec<u32> = hashes.iter().map(|hash| hash.0).collect();
+/// Looks every jar up in one fingerprint request.
+pub(crate) async fn identify_modpack_curseforge(jars: &[UnknownJar]) -> Result<Vec<IdentifiedMod>> {
+    log::info!("Identifying {} file(s) on CurseForge", jars.len());
+    let fingerprints: Vec<u32> = jars.iter().map(|jar| jar.fingerprint).collect();
     let cache_key = fingerprint_cache_key(&fingerprints);
 
     let response = match CURSEFORGE_FINGERPRINT_CACHE.get(&cache_key).await {
@@ -615,11 +560,7 @@ pub async fn identify_modpack_curseforge(
         let Some(hash) = file.hashes.iter().find(|hash| hash.algo == 1) else {
             continue;
         };
-        let Some((original_file, sha512)) = hashes
-            .iter()
-            .find(|(_, sha1, _, _)| sha1 == &hash.value)
-            .map(|hash_info| (hash_info.2.clone(), hash_info.3.clone()))
-        else {
+        let Some(jar) = jars.iter().find(|jar| jar.sha1 == hash.value) else {
             continue;
         };
         let Some(download_url) = file.download_url else {
@@ -627,14 +568,14 @@ pub async fn identify_modpack_curseforge(
         };
         mods.push(IdentifiedMod {
             installed_mod: InstalledMod {
-                sha512: Some(sha512),
+                sha512: Some(jar.sha512.clone()),
                 ..InstalledMod::minimal(
                     file.mod_id.to_string(),
                     ModSource::CurseForge,
                     download_url,
                 )
             },
-            file_name: original_file,
+            file_name: jar.file_name.clone(),
         });
     }
     Ok(mods)
@@ -842,12 +783,11 @@ mod tests {
             }));
         });
 
-        let first = identify_modpack_curseforge(&mc_folder, "alpha".to_string())
+        let jars = super::super::unknown_jars(&mc_folder, "alpha")
             .await
             .unwrap();
-        let second = identify_modpack_curseforge(&mc_folder, "alpha".to_string())
-            .await
-            .unwrap();
+        let first = identify_modpack_curseforge(&jars).await.unwrap();
+        let second = identify_modpack_curseforge(&jars).await.unwrap();
 
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);

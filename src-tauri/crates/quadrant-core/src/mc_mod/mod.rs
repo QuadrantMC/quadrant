@@ -618,12 +618,13 @@ pub async fn install_mod(
     });
 
     let updated_modpack = place_in_every_root(
-        install_roots,
-        &download_path.0,
-        &mod_to_install,
+        install_roots.to_vec(),
+        download_path.0.clone(),
+        mod_to_install,
         mod_type,
-        modpack.as_deref(),
-    )?;
+        modpack,
+    )
+    .await?;
 
     event_sink.publish(BackendEvent::ModInstallProgress(ModProgressPayload {
         mod_id: id,
@@ -635,25 +636,28 @@ pub async fn install_mod(
 
 /// Installs one downloaded file into every root, returning the last modpack a
 /// root updated. Only [`ModType::Mod`] updates a modpack, and it always has
-/// exactly one root.
-fn place_in_every_root(
-    install_roots: &[PathBuf],
-    file: &Path,
-    local_mod: &InstalledMod,
+/// exactly one root. The copies and hashing run on a blocking thread.
+async fn place_in_every_root(
+    install_roots: Vec<PathBuf>,
+    file: PathBuf,
+    local_mod: InstalledMod,
     mod_type: ModType,
-    modpack: Option<&str>,
+    modpack: Option<String>,
 ) -> Result<Option<LocalModpack>> {
-    let mut updated_modpack = None;
-    for root in install_roots {
-        updated_modpack = install_local_file(
-            root,
-            file.to_path_buf(),
-            local_mod.clone(),
-            mod_type,
-            modpack.map(ToOwned::to_owned),
-        )?;
-    }
-    Ok(updated_modpack)
+    tokio::task::spawn_blocking(move || {
+        let mut updated_modpack = None;
+        for root in &install_roots {
+            updated_modpack = install_local_file(
+                root,
+                file.clone(),
+                local_mod.clone(),
+                mod_type,
+                modpack.clone(),
+            )?;
+        }
+        Ok(updated_modpack)
+    })
+    .await?
 }
 
 /// Files also arrive from the frontend, where a provider's missing download
@@ -910,15 +914,16 @@ pub async fn install_remote_file(
         InstalledMod::minimal(id.clone(), source, downloaded_file.1.clone())
     });
     place_in_every_root(
-        install_roots,
-        &downloaded_file.0,
-        &mod_to_install,
+        install_roots.to_vec(),
+        downloaded_file.0.clone(),
+        mod_to_install,
         mod_type,
-        modpack.as_deref(),
+        modpack,
     )
+    .await
 }
 
-/// Attempts to identify local mod files in a modpack using enabled providers.
+//// Attempts to identify local mod files in a modpack using enabled providers.
 pub async fn identify_modpack(
     mc_folder: &Path,
     modpack: String,
@@ -928,25 +933,76 @@ pub async fn identify_modpack(
     log::info!(
         "Identifying mods in modpack \"{modpack}\" (curseforge={curseforge_enabled}, modrinth={modrinth_enabled})"
     );
+    let jars = unknown_jars(mc_folder, &modpack).await?;
     let mut mods = Vec::new();
+    if jars.is_empty() {
+        return Ok(mods);
+    }
     if curseforge_enabled {
         #[cfg(feature = "curseforge")]
         {
-            if let Ok(mut curse_mods) =
-                curseforge::identify_modpack_curseforge(&mc_folder.to_path_buf(), modpack.clone())
-                    .await
-            {
+            if let Ok(mut curse_mods) = curseforge::identify_modpack_curseforge(&jars).await {
                 mods.append(&mut curse_mods);
             }
         }
     }
     if modrinth_enabled {
-        let mut modrinth_mods =
-            modrinth::identify_modpack_modrinth(&mc_folder.to_path_buf(), modpack).await?;
+        let mut modrinth_mods = modrinth::identify_modpack_modrinth(&jars).await?;
         mods.append(&mut modrinth_mods);
     }
     log::info!("Identified {} mod(s)", mods.len());
     Ok(mods)
+}
+
+/// A `.jar` in a pack folder that no manifest entry names, with the hashes the
+/// providers identify files by.
+pub(crate) struct UnknownJar {
+    pub file_name: String,
+    pub sha1: String,
+    pub sha512: String,
+    #[cfg(feature = "curseforge")]
+    pub fingerprint: u32,
+}
+
+/// Reads and hashes the pack's unknown jars once, on a blocking thread, for
+/// every provider to look up.
+pub(crate) async fn unknown_jars(mc_folder: &Path, modpack: &str) -> Result<Vec<UnknownJar>> {
+    use sha1::Digest;
+
+    let listed = crate::modpacks::get_modpack(mc_folder, modpack)
+        .await?
+        .ok_or_else(|| anyhow::Error::from(crate::error::ErrorCode::ModpackMissing))?;
+    let modpack_folder = crate::models::modpack_path(mc_folder, modpack);
+    let known_files: std::collections::HashSet<String> = listed
+        .mods
+        .iter()
+        .filter_map(|mod_| download_file_name(&mod_.download_url))
+        .collect();
+    tokio::task::spawn_blocking(move || {
+        let mut jars = Vec::new();
+        for entry in std::fs::read_dir(&modpack_folder)?.flatten() {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if known_files.contains(&file_name) || !file_name.ends_with(".jar") {
+                continue;
+            }
+            let contents = match std::fs::read(entry.path()) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    log::warn!("Skipping unreadable file {file_name}: {error}");
+                    continue;
+                }
+            };
+            jars.push(UnknownJar {
+                sha1: hex::encode(sha1::Sha1::digest(&contents)),
+                sha512: sha512_hex(&contents),
+                #[cfg(feature = "curseforge")]
+                fingerprint: curseforge_fingerprint::compute_hash(&contents),
+                file_name,
+            });
+        }
+        Ok(jars)
+    })
+    .await?
 }
 
 #[cfg(test)]
