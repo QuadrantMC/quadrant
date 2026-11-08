@@ -24,8 +24,7 @@ import {
   openIn,
   registerMod,
 } from "../../tools";
-import { useContext, useEffect, useRef, useState } from "react";
-import ModInstallPage from "../Pages/ModInstallPage/ModInstallPage";
+import { lazy, useContext, useEffect, useRef, useState } from "react";
 import Button from "../core/Button";
 import "./Mod.css";
 import { createDesktopStore } from "../../desktop";
@@ -36,6 +35,10 @@ import {
 import { isInstallable, isPackType } from "../../contentLocations";
 import { remoteImageProps, trustedImageUrl } from "../../imageHosts";
 import { useReportError } from "../../useReportError";
+
+const ModInstallPage = lazy(
+  () => import("../Pages/ModInstallPage/ModInstallPage"),
+);
 
 export interface IModProps {
   mod: IMod;

@@ -1,6 +1,6 @@
 /** @format */
 
-import { useContext } from "react";
+import { lazy, useContext } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import { MdDownload, MdInfo, MdShare } from "react-icons/md";
@@ -14,7 +14,6 @@ import { shareModpackRaw } from "../../../tools";
 import Button from "../../core/Button";
 import CloudMembersPanel from "./CloudMembersPanel";
 import ModpackBadges from "./ModpackBadges";
-import SharedModpackView from "./SharedModpackView";
 import { formatSyncDate } from "./syncDates";
 import { useModpackInstall } from "./useModpackInstall";
 import { useReportError } from "../../../useReportError";
@@ -25,6 +24,8 @@ export interface SyncedModpackProps {
 }
 
 /** A Quadrant Sync modpack that is not installed locally. */
+const SharedModpackView = lazy(() => import("./SharedModpackView"));
+
 export default function SyncedModpackComponent({
   modpack,
   accountInfo,

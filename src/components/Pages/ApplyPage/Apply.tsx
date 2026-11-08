@@ -1,6 +1,6 @@
 /** @format */
 
-import { useContext, useEffect, useRef, useState } from "react";
+import { lazy, useContext, useEffect, useRef, useState } from "react";
 import {
   LocalModpack,
   MinecraftVersion,
@@ -37,7 +37,6 @@ import {
   ModLoaderProvider,
 } from "../../../modLoaders";
 import { parseShareCode } from "../../../deepLinks";
-import SharedModpackView from "./SharedModpackView";
 import SyncedModpackComponent from "./SyncedModpack";
 import { useSyncedModpacks } from "./useSyncedModpacks";
 import { mergeModpacks } from "./mergeModpacks";
@@ -46,6 +45,8 @@ const toolbarActionClass =
   "flex shrink-0 items-center justify-center gap-2 h-10 px-4 rounded-full text-sm text-white whitespace-nowrap";
 const toolbarIconClass =
   "flex shrink-0 items-center justify-center w-10 h-10 rounded-full bg-slate-700 text-slate-200 hover:text-white";
+
+const SharedModpackView = lazy(() => import("./SharedModpackView"));
 
 export default function ApplyPage() {
   const [modpacks, setModpacks] = useState<LocalModpack[]>([]);

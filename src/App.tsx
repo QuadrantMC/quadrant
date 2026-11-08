@@ -1,6 +1,13 @@
 /** @format */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ContentContext,
   type IContentContext,
@@ -13,22 +20,28 @@ import { type PageWithScroll, popContent, pushContent } from "./contentHistory";
 import "./App.css";
 import { I18nextProvider, useTranslation } from "react-i18next";
 import ApplyPage from "./components/Pages/ApplyPage/Apply";
-import SettingsPage from "./components/Pages/SettingsPage/Settings";
 import quadrantLocale from "./i18n";
-import * as md from "react-icons/md";
-import CurrentModpackPage from "./components/Pages/CurrentModpackPage/CurrentModpackPage";
-import InstalledContentPage from "./components/Pages/InstalledContentPage/InstalledContentPage";
+import {
+  MdAccountCircle,
+  MdArchive,
+  MdCheck,
+  MdClear,
+  MdClose,
+  MdDescription,
+  MdFolder,
+  MdInstallDesktop,
+  MdMinimize,
+  MdSearch,
+  MdSettings,
+} from "react-icons/md";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
-import SearchPage from "./components/Pages/SearchPage/SearchPage";
 import {
   getMod,
   getQuadrantShareModpack,
   requestCheckForUpdates,
 } from "./tools";
-import ModInstallPage from "./components/Pages/ModInstallPage/ModInstallPage";
-import AccountPage from "./components/Pages/AccountPage/AccountPage";
-import SharedModpackView from "./components/Pages/ApplyPage/SharedModpackView";
 import Button from "./components/core/Button";
+import CircularProgress from "./components/core/CircularProgress";
 import Notifications from "./components/shared/Notifications";
 import {
   createDesktopStore,
@@ -54,6 +67,15 @@ import { resolveDeepLink } from "./deepLinks";
 import { isInstallable } from "./contentLocations";
 import { appendSnackbarHistory } from "./snackbar";
 
+// Pages load on first use, so the window opens without parsing all of them.
+const SettingsPage = lazy(() => import("./components/Pages/SettingsPage/Settings"));
+const CurrentModpackPage = lazy(() => import("./components/Pages/CurrentModpackPage/CurrentModpackPage"));
+const InstalledContentPage = lazy(() => import("./components/Pages/InstalledContentPage/InstalledContentPage"));
+const SearchPage = lazy(() => import("./components/Pages/SearchPage/SearchPage"));
+const ModInstallPage = lazy(() => import("./components/Pages/ModInstallPage/ModInstallPage"));
+const AccountPage = lazy(() => import("./components/Pages/AccountPage/AccountPage"));
+const SharedModpackView = lazy(() => import("./components/Pages/ApplyPage/SharedModpackView"));
+
 function App() {
   const { t } = useTranslation();
   const pages: Page[] = [
@@ -61,7 +83,7 @@ function App() {
       content: <ApplyPage />,
       title: t("apply"),
       name: "apply",
-      icon: <md.MdCheck className="duration-0 w-6 h-6" />,
+      icon: <MdCheck className="duration-0 w-6 h-6" />,
       style: " hover:bg-emerald-400 data-[selected=true]:bg-emerald-900 ",
       main: true,
     },
@@ -69,7 +91,7 @@ function App() {
       content: <CurrentModpackPage />,
       title: t("currentModpack"),
       name: "currentModpack",
-      icon: <md.MdDescription className="duration-0 w-6 h-6" />,
+      icon: <MdDescription className="duration-0 w-6 h-6" />,
       style: " hover:bg-blue-400 data-[selected=true]:bg-blue-900 ",
       main: true,
     },
@@ -77,7 +99,7 @@ function App() {
       content: <SearchPage />,
       title: t("search"),
       name: "search",
-      icon: <md.MdSearch className="duration-0 w-6 h-6" />,
+      icon: <MdSearch className="duration-0 w-6 h-6" />,
       style: " hover:bg-sky-400 data-[selected=true]:bg-sky-900 ",
       main: true,
     },
@@ -85,7 +107,7 @@ function App() {
       content: <InstalledContentPage />,
       title: t("installedContent"),
       name: "installedContent",
-      icon: <md.MdFolder className="duration-0 w-6 h-6" />,
+      icon: <MdFolder className="duration-0 w-6 h-6" />,
       style: " hover:bg-violet-400 data-[selected=true]:bg-violet-900 ",
       main: true,
     },
@@ -93,7 +115,7 @@ function App() {
       content: <AccountPage />,
       title: t("account"),
       name: "account",
-      icon: <md.MdAccountCircle className="duration-0 w-6 h-6" />,
+      icon: <MdAccountCircle className="duration-0 w-6 h-6" />,
       style: " hover:bg-orange-400 data-[selected=true]:bg-orange-900 ",
       main: true,
     },
@@ -101,7 +123,7 @@ function App() {
       content: <SettingsPage />,
       title: t("settings"),
       name: "settings",
-      icon: <md.MdSettings className="duration-0 w-6 h-6" />,
+      icon: <MdSettings className="duration-0 w-6 h-6" />,
       style: " hover:bg-slate-400 data-[selected=true]:bg-slate-900 ",
       main: true,
     },
@@ -191,7 +213,7 @@ function App() {
           const message = (
             <span className="flex">
               <span>{quadrantLocale.t("export")}</span>
-              <md.MdArchive className="w-6 h-6 mx-2" /> {progress}%
+              <MdArchive className="w-6 h-6 mx-2" /> {progress}%
             </span>
           );
 
@@ -680,7 +702,7 @@ function App() {
                                 ? t("switchToQuadrantNative")
                                 : t("appUpdate")}
                             </p>{" "}
-                            <md.MdInstallDesktop className="ml-2 w-6" />
+                            <MdInstallDesktop className="ml-2 w-6" />
                           </div>
                         ) : (
                           (updateDownloadProgress * 100).toFixed(0) + "%"
@@ -711,7 +733,7 @@ function App() {
                               await currentWindow.minimize();
                             }}
                           >
-                            <md.MdMinimize />
+                            <MdMinimize />
                           </Button>
                           <Button
                             fullRound
@@ -728,7 +750,7 @@ function App() {
                               }
                             }}
                           >
-                            <md.MdClose />
+                            <MdClose />
                           </Button>
                         </>
                       )}
@@ -745,17 +767,19 @@ function App() {
                   // key={content.name}
                   ref={contentRef}
                 >
-                  {content.main !== true && content.content}
-                  <div
-                    className={
-                      "h-full content-main " +
-                      (content.main === true && content.name === page.name
-                        ? ""
-                        : "hidden")
-                    }
-                  >
-                    <AnimatePresence>{page.content}</AnimatePresence>
-                  </div>
+                  <Suspense fallback={<CircularProgress />}>
+                    {content.main !== true && content.content}
+                    <div
+                      className={
+                        "h-full content-main " +
+                        (content.main === true && content.name === page.name
+                          ? ""
+                          : "hidden")
+                      }
+                    >
+                      <AnimatePresence>{page.content}</AnimatePresence>
+                    </div>
+                  </Suspense>
                 </motion.div>
               </div>
               {/* Snackbar */}
@@ -779,7 +803,7 @@ function App() {
                           setSnackbarEnabled(false);
                         }}
                       >
-                        <md.MdClear className="w-4 h-4" />
+                        <MdClear className="w-4 h-4" />
                       </Button>
                     </div>
                   </motion.div>

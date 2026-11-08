@@ -33,7 +33,4 @@ export default defineConfig(async ({ command }) => ({
       ignored: ["**/src-tauri/**"],
     },
   },
-  build: {
-    chunkSizeWarningLimit: 4096,
-  },
 }));

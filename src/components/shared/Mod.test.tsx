@@ -3,6 +3,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Suspense } from "react";
 import {
   ContentContext,
   ModLoader,
@@ -271,9 +272,15 @@ describe("Mod", () => {
       </ContentContext.Provider>,
     );
     await userEvent.click(screen.getByRole("button", { name: "Installed" }));
-    render(context.changeContent.mock.calls[0][0].content);
-    expect(mocks.installPage).toHaveBeenCalledWith(
-      expect.objectContaining({ installTarget: target }),
+    render(
+      <Suspense fallback={null}>
+        {context.changeContent.mock.calls[0][0].content}
+      </Suspense>,
+    );
+    await waitFor(() =>
+      expect(mocks.installPage).toHaveBeenCalledWith(
+        expect.objectContaining({ installTarget: target }),
+      ),
     );
   });
 
