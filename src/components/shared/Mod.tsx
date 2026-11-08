@@ -28,7 +28,11 @@ import { useContext, useEffect, useRef, useState } from "react";
 import ModInstallPage from "../Pages/ModInstallPage/ModInstallPage";
 import Button from "../core/Button";
 import "./Mod.css";
-import { createDesktopStore, listen } from "../../desktop";
+import { createDesktopStore } from "../../desktop";
+import {
+  subscribeModDownloadProgress,
+  subscribeModInstallProgress,
+} from "./modProgress";
 import { isInstallable, isPackType } from "../../contentLocations";
 import { useReportError } from "../../useReportError";
 
@@ -128,67 +132,29 @@ export default function Mod(props: IModProps) {
 
   useEffect(() => {
     let isUnmounted = false;
-    let unlistenProgress: (() => void | Promise<void>) | null = null;
-    let unlistenInstallProgress: (() => void | Promise<void>) | null = null;
-
-    const effect = async () => {
-      try {
-        unlistenProgress = await listen("modDownloadProgress", (event: any) => {
-          if (event.payload.modId === modId) {
-            setProgress(event.payload.progress);
-            if (event.payload.progress === 100) {
-              unlistenProgress?.();
-              unlistenProgress = null;
-            }
-          }
-        });
-        if (isUnmounted && unlistenProgress) {
-          unlistenProgress();
-          unlistenProgress = null;
-        }
-
-        const roundIcons = await config.get<boolean>("clipIcons");
+    config
+      .get<boolean>("clipIcons")
+      .then((roundIcons) => {
         if (!isUnmounted) {
           setClipIcons(roundIcons ?? true);
         }
+      })
+      .catch(console.error);
 
-        unlistenInstallProgress = await listen(
-          "modInstallProgress",
-          (event: any) => {
-            if (
-              event.payload.modId === modId &&
-              event.payload.progress === 100
-            ) {
-              console.log(event);
-
-              if (!isAutoinstallable) {
-                setVisible(false);
-              }
-              setProgress(event.payload.progress);
-              unlistenInstallProgress?.();
-              unlistenInstallProgress = null;
-            }
-          },
-        );
-        if (isUnmounted && unlistenInstallProgress) {
-          unlistenInstallProgress();
-          unlistenInstallProgress = null;
+    const stopDownload = subscribeModDownloadProgress(modId, setProgress);
+    const stopInstall = subscribeModInstallProgress(modId, (installProgress) => {
+      if (installProgress === 100) {
+        if (!isAutoinstallable) {
+          setVisible(false);
         }
-      } catch (error) {
-        console.error(error);
+        setProgress(installProgress);
       }
-    };
-
-    effect().catch(console.error);
+    });
 
     return () => {
       isUnmounted = true;
-      if (unlistenProgress) {
-        unlistenProgress();
-      }
-      if (unlistenInstallProgress) {
-        unlistenInstallProgress();
-      }
+      stopDownload();
+      stopInstall();
     };
   }, [config, isAutoinstallable, modId]);
 
