@@ -109,6 +109,10 @@ pub async fn get_quadrant_settings(
             .ok_or_else(|| anyhow!("No valid settings"))?
         {
             if SYNCED_KEYS.contains(&key.as_str()) {
+                if !is_acceptable(settings_store, key, value) {
+                    log::warn!("Ignoring the cloud value of {key}: it isn't a valid setting");
+                    continue;
+                }
                 settings_store.set_value(key, value.to_owned())?;
                 // Frontend subscribers only learn about changes through this
                 // event; without it a synced UI scale or theme sits unapplied
@@ -124,6 +128,41 @@ pub async fn get_quadrant_settings(
     }
 
     Err(anyhow!("No valid settings"))
+}
+
+/// Whether a cloud value may overwrite the local one: the type the readers
+/// expect, inside the range they handle. A copy that was tampered with, or
+/// written by a client with other ideas, can't break them or move a limit.
+/// Data collection is only ever switched off by a pull, never on, because
+/// only the person at this machine can agree to it.
+fn is_acceptable(settings_store: &impl SettingsStore, key: &str, value: &Value) -> bool {
+    let in_range = |min: f64, max: f64| {
+        value
+            .as_f64()
+            .is_some_and(|number| (min..=max).contains(&number))
+    };
+    match key {
+        "collectUserData" => match value.as_bool() {
+            Some(true) => settings_store
+                .get_bool("collectUserData")
+                .is_ok_and(|local| local == Some(true)),
+            Some(false) => true,
+            None => false,
+        },
+        "modrinth"
+        | "curseforge"
+        | "rssFeeds"
+        | "silentNews"
+        | "autoQuadrantSync"
+        | "showUnupgradeableMods"
+        | "experimentalFeatures"
+        | "clipIcons" => value.is_boolean(),
+        "lastPage" => value.is_i64() && in_range(0.0, 1000.0),
+        "lastPageName" | "colorTheme" => value.as_str().is_some_and(|text| text.len() <= 256),
+        "uiScale" => value.is_number() && in_range(50.0, 200.0),
+        "cacheKeepAlive" => value.is_i64() && in_range(1.0, 3650.0),
+        _ => false,
+    }
 }
 
 /// Pushes the current synced settings subset to the Quadrant backend.
@@ -353,7 +392,7 @@ mod tests {
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
-                    r#"{"sync_date":"2025-01-01T00:00:00+00:00","settings":"{\"uiScale\":1.5,\"hardwareId\":\"other-machine\"}"}"#,
+                    r#"{"sync_date":"2025-01-01T00:00:00+00:00","settings":"{\"uiScale\":110,\"hardwareId\":\"other-machine\"}"}"#,
                 );
         });
 
@@ -381,6 +420,98 @@ mod tests {
             })
             .collect();
         assert_eq!(keys, ["uiScale", "lastSettingsUpdated"]);
+    }
+
+    #[test]
+    fn cloud_values_must_fit_what_the_readers_expect() {
+        use super::is_acceptable;
+        use serde_json::json;
+
+        let store = MemorySettingsStore::updated_at("2024-01-01T00:00:00+00:00");
+        for (key, value) in [
+            ("modrinth", json!(false)),
+            ("uiScale", json!(100)),
+            ("uiScale", json!(150.0)),
+            ("cacheKeepAlive", json!(30)),
+            ("lastPage", json!(2)),
+            ("lastPageName", json!("search")),
+            ("colorTheme", json!("custom:mine")),
+            // Switching collection off is always fine.
+            ("collectUserData", json!(false)),
+        ] {
+            assert!(is_acceptable(&store, key, &value), "{key} {value}");
+        }
+        for (key, value) in [
+            ("modrinth", json!("yes")),
+            ("clipIcons", json!(1)),
+            ("uiScale", json!(10)),
+            ("uiScale", json!(1e9)),
+            ("uiScale", json!("100")),
+            ("cacheKeepAlive", json!(0)),
+            ("cacheKeepAlive", json!(-5)),
+            ("cacheKeepAlive", json!(1.5)),
+            ("lastPage", json!("1")),
+            ("lastPageName", json!("x".repeat(257))),
+            ("colorTheme", json!(null)),
+            ("collectUserData", json!("true")),
+            // Only this machine's user turns collection on.
+            ("collectUserData", json!(true)),
+            ("hardwareId", json!("x")),
+        ] {
+            assert!(!is_acceptable(&store, key, &value), "{key} {value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn get_quadrant_settings_skips_invalid_values_and_still_applies_the_rest() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let _mock = mock_settings_get(
+            &server,
+            200,
+            r#"{"sync_date":"2025-01-01T00:00:00+00:00","settings":"{\"uiScale\":9000,\"collectUserData\":true,\"clipIcons\":false}"}"#,
+        );
+
+        let store = RecordingSettingsStore::default();
+        let outcome = get_quadrant_settings(
+            &store,
+            &MemorySecretStore,
+            "test-agent",
+            "test-client-id",
+            "test-client-secret",
+            &NoopEvents,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, SettingsPull::Applied);
+        let written = store.0.lock().unwrap();
+        assert_eq!(written.get("clipIcons"), Some(&Value::Bool(false)));
+        assert!(!written.contains_key("uiScale"));
+        assert!(!written.contains_key("collectUserData"));
+    }
+
+    #[derive(Default)]
+    struct RecordingSettingsStore(std::sync::Mutex<std::collections::HashMap<String, Value>>);
+
+    impl SettingsStore for RecordingSettingsStore {
+        fn get_value(&self, key: &str) -> Result<Option<Value>> {
+            if key == "lastSettingsUpdated" {
+                return Ok(Some(Value::String("2024-01-01T00:00:00+00:00".to_string())));
+            }
+            Ok(self.0.lock().unwrap().get(key).cloned())
+        }
+
+        fn set_value(&self, key: &str, value: Value) -> Result<()> {
+            self.0.lock().unwrap().insert(key.to_string(), value);
+            Ok(())
+        }
+
+        fn entries(&self) -> Result<Vec<(String, Value)>> {
+            Ok(Vec::new())
+        }
     }
 
     async fn pull(last_settings_updated: &'static str) -> Result<SettingsPull> {
