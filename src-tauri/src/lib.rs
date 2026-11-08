@@ -700,6 +700,13 @@ async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
             .endpoints(update_urls)?
             .version_comparator(|current, update| update.version != current)
             .header("User-Agent", quadrant_core::mc_mod::get_user_agent())?
+            // Per read rather than `timeout`, which would cap the whole
+            // installer download.
+            .configure_client(|client| {
+                client
+                    .connect_timeout(std::time::Duration::from_secs(30))
+                    .read_timeout(std::time::Duration::from_secs(60))
+            })
             .build()?;
 
         if let Some(update) = updater.check().await? {
