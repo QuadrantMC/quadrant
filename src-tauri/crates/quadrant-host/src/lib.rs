@@ -1007,12 +1007,12 @@ impl QuadrantHost {
     }
 
     pub async fn export_modpack_to(&self, modpack: String, destination: PathBuf) -> Result<()> {
-        export_modpack_to(
-            &self.get_minecraft_folder()?,
-            &modpack,
-            &destination,
-            &self.inner.event_sink,
-        )
+        let mc_folder = self.get_minecraft_folder()?;
+        let event_sink = self.inner.event_sink.clone();
+        tokio::task::spawn_blocking(move || {
+            export_modpack_to(&mc_folder, &modpack, &destination, &event_sink)
+        })
+        .await?
     }
 
     pub fn set_modpack_sync_date(

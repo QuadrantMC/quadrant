@@ -1093,20 +1093,32 @@ fn write_export_archive(
     event_sink: &impl EventSink,
 ) -> Result<()> {
     let mut zip = zip::ZipWriter::new(std::fs::File::create(archive_path)?);
-    let options: FileOptions<ExtendedFileOptions> = FileOptions::default()
+    let compressed: FileOptions<ExtendedFileOptions> = FileOptions::default()
         .compression_method(zip::CompressionMethod::Bzip2)
         .unix_permissions(0o755)
         .compression_level(Some(9))
         .large_file(true);
+    // Jars and zips are compressed already; recompressing them costs minutes
+    // on a large pack and saves nothing.
+    let stored = compressed
+        .clone()
+        .compression_method(zip::CompressionMethod::Stored)
+        .compression_level(None);
     let total_files = entries.len();
 
     for (index, file) in entries.iter().enumerate() {
-        let contents = std::fs::read(file.path())?;
         let file_name = file.file_name().to_string_lossy().to_string();
-        zip.start_file(file_name, options.clone())?;
-        zip.write_all(&contents)?;
+        let lowercase = file_name.to_ascii_lowercase();
+        let options = if lowercase.ends_with(".jar") || lowercase.ends_with(".zip") {
+            stored.clone()
+        } else {
+            compressed.clone()
+        };
+        zip.start_file(file_name, options)?;
+        std::io::copy(&mut std::fs::File::open(file.path())?, &mut zip)?;
+        // 1.0 is sent once, after the archive is finished and in place.
         event_sink.publish(BackendEvent::QuadrantExportProgress(
-            (index + 1) as f64 / total_files as f64,
+            (index + 1) as f64 / (total_files + 1) as f64,
         ))?;
     }
 
@@ -1462,20 +1474,32 @@ mod tests {
         std::fs::write(modpack_path(&mc_folder, "alpha").join("sample.jar"), "jar").unwrap();
 
         let destination = mc_folder.join("alpha.quadrantExport.zip");
-        export_modpack_to(
-            &mc_folder,
-            "alpha",
-            &destination,
-            &CollectingEvents::default(),
-        )
-        .unwrap();
+        let events = CollectingEvents::default();
+        export_modpack_to(&mc_folder, "alpha", &destination, &events).unwrap();
 
         let file = std::fs::File::open(destination).unwrap();
         let mut archive = zip::ZipArchive::new(file).unwrap();
+        assert_eq!(
+            archive.by_name("modConfigV2.json").unwrap().compression(),
+            zip::CompressionMethod::Bzip2
+        );
         let mut file = archive.by_name("sample.jar").unwrap();
+        assert_eq!(file.compression(), zip::CompressionMethod::Stored);
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
         assert_eq!(contents, "jar");
+
+        let progress: Vec<f64> = events
+            .events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                BackendEvent::QuadrantExportProgress(value) => Some(*value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(progress.iter().filter(|value| **value >= 1.0).count(), 1);
+        assert_eq!(progress.last(), Some(&1.0));
     }
 
     #[tokio::test]
