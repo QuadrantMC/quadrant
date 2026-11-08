@@ -18,13 +18,26 @@ import {
   startOAuthServer,
 } from "../../../desktop";
 
+// How long a started sign-in waits for the browser to come back.
+const OAUTH_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+
+// The callback server outlives this page: switching tabs while the browser
+// is open must not drop the login, and a remounted page must still be able to
+// shut down a server the previous instance started.
+let endPendingLogin: (() => Promise<void>) | null = null;
+
+async function cancelPendingLogin() {
+  const end = endPendingLogin;
+  endPendingLogin = null;
+  await end?.();
+}
+
 export default function AccountPage() {
   const { t } = useTranslation();
   const [accountInfo, setAccountInfo] = useState<
     AccountInfo | null | undefined
   >(undefined);
   const [loginWarning, setLoginWarning] = useState<string | null>(null);
-  const oauthCleanupRef = useRef<(() => Promise<void>) | null>(null);
   const loginStartingRef = useRef(false);
   const [loginStarting, setLoginStarting] = useState(false);
 
@@ -61,14 +74,16 @@ export default function AccountPage() {
     let unlistenRecheck: (() => void) | null = null;
 
     const effect = async () => {
-      unlistenRecheck = await listen<string>(
-        "recheckAccountToken",
-        async () => {
-          if (!isUnmounted) {
-            await updateAccountInfo();
-          }
-        },
-      );
+      const unlisten = await listen<string>("recheckAccountToken", async () => {
+        if (!isUnmounted) {
+          await updateAccountInfo();
+        }
+      });
+      if (isUnmounted) {
+        unlisten();
+        return;
+      }
+      unlistenRecheck = unlisten;
 
       await updateAccountInfo();
     };
@@ -78,8 +93,6 @@ export default function AccountPage() {
     return () => {
       isUnmounted = true;
       unlistenRecheck?.();
-      void oauthCleanupRef.current?.();
-      oauthCleanupRef.current = null;
     };
   }, []);
 
@@ -166,8 +179,7 @@ export default function AccountPage() {
               loginStartingRef.current = true;
               setLoginStarting(true);
               setLoginWarning(null);
-              await oauthCleanupRef.current?.();
-              oauthCleanupRef.current = null;
+              await cancelPendingLogin();
               const randomBytes = new Uint8Array(24);
               crypto.getRandomValues(randomBytes);
               const randomString = Array.from(randomBytes, (b) =>
@@ -184,7 +196,12 @@ export default function AccountPage() {
                   ports: [4000, 4001, 4002, 4003, 4004, 4005],
                 });
                 let unlistenOAuth: (() => void) | null = null;
-                oauthCleanupRef.current = async () => {
+                const expiry = setTimeout(
+                  () => void cancelPendingLogin().catch(console.error),
+                  OAUTH_LOGIN_TIMEOUT_MS,
+                );
+                endPendingLogin = async () => {
+                  clearTimeout(expiry);
                   unlistenOAuth?.();
                   await cancelOAuthServer(port);
                 };
@@ -247,14 +264,12 @@ export default function AccountPage() {
                     setAccountInfo(null);
                     showLoginFailureWarning();
                   } finally {
-                    await oauthCleanupRef.current?.();
-                    oauthCleanupRef.current = null;
+                    await cancelPendingLogin();
                   }
                 });
               } catch (error) {
                 console.error("Error starting OAuth server:", error);
-                await oauthCleanupRef.current?.();
-                oauthCleanupRef.current = null;
+                await cancelPendingLogin();
                 showLoginFailureWarning();
               } finally {
                 // The guard only spans server startup; once the callback
