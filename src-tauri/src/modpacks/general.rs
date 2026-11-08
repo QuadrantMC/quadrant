@@ -8,10 +8,6 @@ pub use quadrant_core::models::{InstalledModpack, LocalModpack, ModLoader, SyncI
 
 use crate::tauri_adapter::TauriShell;
 
-pub fn get_modpack_path(mc_folder: &Path, modpack: &LocalModpack) -> PathBuf {
-    quadrant_core::models::modpack_path(mc_folder, &modpack.name)
-}
-
 #[tauri::command]
 pub async fn get_modpacks(hide_free: bool, app: AppHandle) -> Vec<LocalModpack> {
     app.state::<QuadrantHost>()
@@ -30,10 +26,6 @@ pub fn frontend_apply_modpack(name: String, app: AppHandle) -> Result<(), tauri:
     app.state::<QuadrantHost>()
         .frontend_apply_modpack(name)
         .map_err(crate::command_error)
-}
-
-pub fn apply_modpack(name: String, app: AppHandle) -> Result<(), anyhow::Error> {
-    app.state::<QuadrantHost>().frontend_apply_modpack(name)
 }
 
 #[tauri::command]
@@ -81,8 +73,45 @@ pub async fn export_modpack_to(
     destination: String,
     app: AppHandle,
 ) -> Result<(), tauri::Error> {
+    // The save dialog runs in the webview, so this path comes from there.
+    // Only an archive may be written, never any file the renderer names.
+    let destination = PathBuf::from(destination);
+    if !is_export_archive_path(&destination) {
+        return Err(crate::command_error(anyhow::anyhow!(
+            "an export must be saved as a .zip file"
+        )));
+    }
     app.state::<QuadrantHost>()
-        .export_modpack_to(modpack, destination.into())
+        .export_modpack_to(modpack, destination)
         .await
         .map_err(crate::command_error)
+}
+
+fn is_export_archive_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+        && path.file_stem().is_some_and(|stem| !stem.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_export_archive_path;
+    use std::path::Path;
+
+    #[test]
+    fn exports_are_written_only_to_zip_files() {
+        for accepted in ["C:\\Users\\a\\Pack.quadrantExport.zip", "/home/a/pack.ZIP"] {
+            assert!(is_export_archive_path(Path::new(accepted)), "{accepted}");
+        }
+        for refused in [
+            "C:\\Users\\a\\.bashrc",
+            "/home/a/.profile",
+            "/home/a/pack.zip.sh",
+            "/home/a/zip",
+            "/home/a/.zip",
+            "",
+        ] {
+            assert!(!is_export_archive_path(Path::new(refused)), "{refused}");
+        }
+    }
 }
