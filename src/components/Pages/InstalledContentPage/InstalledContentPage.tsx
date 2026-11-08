@@ -250,7 +250,9 @@ function ContentFileRow({
           label={t("installedContentCopyFileLabel", { file: file.fileName })}
           busy={actions.pending === rowKey}
           disabled={actions.pending !== null}
-          targets={copyTargets(actions.locations, actions.nameIndex, [entry])}
+          getTargets={() =>
+            copyTargets(actions.locations, actions.nameIndex, [entry])
+          }
           optionLabel={(target) => locationTitle(target.location, t)}
           onPick={(target) =>
             actions.copy({
@@ -307,11 +309,9 @@ function SelectionBar({ actions }: SelectionBarProps) {
           label={t("installedContentCopySelectedLabel")}
           controlKey={selectionControlKey}
           pending={actions.pending}
-          targets={copyTargets(
-            actions.locations,
-            actions.nameIndex,
-            actions.selection,
-          )}
+          getTargets={() =>
+            copyTargets(actions.locations, actions.nameIndex, actions.selection)
+          }
           onPick={(to, picked) =>
             actions.copy({ key: selectionControlKey, to, groups: picked })
           }
@@ -352,7 +352,7 @@ function ContentSectionView({
   };
   const title = sectionTitle(section.modType, t);
   const locationName = locationTitle(location, t);
-  const selected = selectedIn(actions.selection, ref);
+  const selected = new Set(selectedIn(actions.selection, ref));
   const allNames = section.files.map((file) => file.fileName);
   const allFiles = allNames.map((fileName) => ({ ...ref, fileName }));
   const allKey = copyAllControlKey(ref);
@@ -377,11 +377,9 @@ function ContentSectionView({
             })}
             controlKey={allKey}
             pending={actions.pending}
-            targets={copyTargets(
-              actions.locations,
-              actions.nameIndex,
-              allFiles,
-            )}
+            getTargets={() =>
+              copyTargets(actions.locations, actions.nameIndex, allFiles)
+            }
             onPick={(to, picked) =>
               actions.copy({ key: allKey, to, groups: picked })
             }
@@ -434,7 +432,7 @@ function ContentSectionView({
                   section={ref}
                   file={file}
                   actions={actions}
-                  selected={selected.includes(file.fileName)}
+                  selected={selected.has(file.fileName)}
                 />
               ))}
             </ul>

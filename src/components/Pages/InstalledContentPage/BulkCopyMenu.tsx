@@ -7,7 +7,7 @@ import CopyToMenu from "./CopyToMenu";
 import { CopyTarget, SectionFiles } from "./contentActions";
 
 export interface BulkCopyMenuProps {
-  targets: CopyTarget[];
+  getTargets: () => CopyTarget[];
   /** The control this menu speaks for, so only it shows as busy. */
   controlKey: string;
   /** Screen-reader name of the button, naming what would be copied. */
@@ -24,7 +24,7 @@ export interface BulkCopyMenuProps {
  * would take. Every bulk control offers the same choice, so they share this.
  */
 export default function BulkCopyMenu({
-  targets,
+  getTargets,
   controlKey,
   label,
   text,
@@ -38,7 +38,7 @@ export default function BulkCopyMenu({
       label={label}
       busy={pending === controlKey}
       disabled={pending !== null}
-      targets={targets}
+      getTargets={getTargets}
       optionLabel={(target) =>
         t("installedContentCopyMissing", {
           name: locationTitle(target.location, t),

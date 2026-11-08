@@ -6,7 +6,8 @@ import { menuItemClass, menuPanelClass } from "../../core/menuClasses";
 import { CopyTarget } from "./contentActions";
 
 export interface CopyToMenuProps {
-  targets: CopyTarget[];
+  /** Called only while the menu is open, so closed rows cost nothing. */
+  getTargets: () => CopyTarget[];
   /** Names one destination. The bulk controls also count what would move. */
   optionLabel: (target: CopyTarget) => string;
   /** Screen-reader name of the button, naming what would be copied. */
@@ -20,8 +21,34 @@ export interface CopyToMenuProps {
   onPick: (target: CopyTarget) => void;
 }
 
+function TargetItems({
+  getTargets,
+  optionLabel,
+  onPick,
+}: Pick<CopyToMenuProps, "getTargets" | "optionLabel" | "onPick">) {
+  return getTargets().map((target) => {
+    // Nothing left to copy there; the entry shows a check instead.
+    const nothingToDo = target.count === 0;
+    return (
+      <MenuItem key={target.location.id}>
+        <button
+          type="button"
+          disabled={nothingToDo}
+          onClick={() => onPick(target)}
+          className={"flex items-center gap-2 " + menuItemClass}
+        >
+          <span className="min-w-0 break-words">{optionLabel(target)}</span>
+          {nothingToDo && (
+            <MdCheck aria-hidden="true" className="w-5 h-5 ml-auto shrink-0" />
+          )}
+        </button>
+      </MenuItem>
+    );
+  });
+}
+
 export default function CopyToMenu({
-  targets,
+  getTargets,
   optionLabel,
   label,
   text,
@@ -48,30 +75,11 @@ export default function CopyToMenu({
         />
       </MenuButton>
       <MenuItems anchor="bottom end" className={menuPanelClass}>
-        {targets.map((target) => {
-          // Nothing left to copy there; the entry shows a check instead.
-          const nothingToDo = target.count === 0;
-          return (
-            <MenuItem key={target.location.id}>
-              <button
-                type="button"
-                disabled={nothingToDo}
-                onClick={() => onPick(target)}
-                className={"flex items-center gap-2 " + menuItemClass}
-              >
-                <span className="min-w-0 break-words">
-                  {optionLabel(target)}
-                </span>
-                {nothingToDo && (
-                  <MdCheck
-                    aria-hidden="true"
-                    className="w-5 h-5 ml-auto shrink-0"
-                  />
-                )}
-              </button>
-            </MenuItem>
-          );
-        })}
+        <TargetItems
+          getTargets={getTargets}
+          optionLabel={optionLabel}
+          onPick={onPick}
+        />
       </MenuItems>
     </Menu>
   );
