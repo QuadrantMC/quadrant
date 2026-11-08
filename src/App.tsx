@@ -76,6 +76,15 @@ const ModInstallPage = lazy(() => import("./components/Pages/ModInstallPage/ModI
 const AccountPage = lazy(() => import("./components/Pages/AccountPage/AccountPage"));
 const SharedModpackView = lazy(() => import("./components/Pages/ApplyPage/SharedModpackView"));
 
+interface ModpackSyncWarningPayload {
+  modpackId: string;
+  name: string;
+  /** False when the update was held back for the user to review. */
+  applied: boolean;
+  onlineMods: string[];
+  unverifiedMods: string[];
+}
+
 function App() {
   const { t } = useTranslation();
   const pages: Page[] = [
@@ -253,6 +262,33 @@ function App() {
         exportProgressUnlisten();
       } else {
         cleanupFns.push(exportProgressUnlisten);
+      }
+
+      // Auto-sync holds back an update that adds a mod from an arbitrary link
+      // and marks it processed, so this is the only place the user hears of it.
+      const syncWarningUnlisten = await listen<ModpackSyncWarningPayload>(
+        "modpackSyncWarning",
+        (e) => {
+          if (isUnmounted) {
+            return;
+          }
+          const { name, applied, unverifiedMods } = e.payload;
+          contextFunctions.setSnackbar({
+            message: applied
+              ? quadrantLocale.t("modpackSyncUnverified", {
+                  name,
+                  amount: unverifiedMods.length,
+                })
+              : quadrantLocale.t("modpackSyncNeedsReview", { name }),
+            className: "bg-amber-600 rounded-4xl",
+            timeout: 15000,
+          });
+        },
+      );
+      if (isUnmounted) {
+        syncWarningUnlisten();
+      } else {
+        cleanupFns.push(syncWarningUnlisten);
       }
 
       const modpackDownloadUnlisten = await listen(

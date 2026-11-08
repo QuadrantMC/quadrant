@@ -250,6 +250,51 @@ describe("App deep links", () => {
   });
 });
 
+describe("App sync warnings", () => {
+  const warn = (payload: Record<string, unknown>) =>
+    act(async () => hosts.listeners.modpackSyncWarning({ payload }));
+
+  it("tells the user an update was held back for review", async () => {
+    await renderApp();
+    await waitFor(() =>
+      expect(hosts.listeners.modpackSyncWarning).toBeTypeOf("function"),
+    );
+
+    await warn({
+      modpackId: "id",
+      name: "Survival",
+      applied: false,
+      onlineMods: ["Linked"],
+      unverifiedMods: [],
+    });
+
+    expect(
+      await screen.findByText("An update to Survival needs your review"),
+    ).toBeVisible();
+  });
+
+  it("warns how many files of an applied update could not be verified", async () => {
+    await renderApp();
+    await waitFor(() =>
+      expect(hosts.listeners.modpackSyncWarning).toBeTypeOf("function"),
+    );
+
+    await warn({
+      modpackId: "id",
+      name: "Survival",
+      applied: true,
+      onlineMods: [],
+      unverifiedMods: ["A", "B"],
+    });
+
+    expect(
+      await screen.findByText(
+        "Survival was updated, but Quadrant couldn't verify 2 of its files.",
+      ),
+    ).toBeVisible();
+  });
+});
+
 describe("App transfer progress", () => {
   const emit = (event: string, payload: number) =>
     act(async () => hosts.listeners[event]({ payload }));
