@@ -551,6 +551,16 @@ fn parse_json_body<T: serde::de::DeserializeOwned>(
         });
     }
 
+    parse_success_body(response_raw, error_prefix, empty_body_error)
+}
+
+/// The JSON a successful response carries, with the errors an empty or
+/// malformed body gets.
+pub(crate) fn parse_success_body<T: serde::de::DeserializeOwned>(
+    response_raw: &str,
+    error_prefix: &str,
+    empty_body_error: &str,
+) -> Result<T> {
     let trimmed = response_raw.trim();
     if trimmed.is_empty() {
         return Err(anyhow::anyhow!("{}", empty_body_error));
@@ -566,7 +576,7 @@ fn parse_json_body<T: serde::de::DeserializeOwned>(
     })
 }
 
-fn response_preview(body: &str) -> String {
+pub(crate) fn response_preview(body: &str) -> String {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         return "<empty body>".to_string();
