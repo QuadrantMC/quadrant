@@ -19,6 +19,22 @@ use tauri_plugin_deep_link::DeepLinkExt;
 #[cfg(feature = "updater")]
 use tauri_plugin_updater::UpdaterExt;
 
+/// Defines the Tauri commands that only pass their arguments to the
+/// `QuadrantHost` method of the same name and report its error with a stable
+/// code. Commands that do more (blocking work, events, a dialog) are written
+/// out where they live.
+macro_rules! host_commands {
+    ($($name:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;)*) => {$(
+        #[tauri::command]
+        pub async fn $name($($arg: $ty,)* app: tauri::AppHandle) -> Result<$ret, tauri::Error> {
+            tauri::Manager::state::<quadrant_host::QuadrantHost>(&app)
+                .$name($($arg),*)
+                .await
+                .map_err($crate::command_error)
+        }
+    )*};
+}
+
 #[cfg(feature = "quadrant_id")]
 pub mod account;
 

@@ -18,27 +18,9 @@ pub async fn get_prism_instances(app: AppHandle) -> Vec<PrismInstance> {
         })
 }
 
-#[tauri::command]
-pub async fn get_prism_sync_plans(
-    name: String,
-    app: AppHandle,
-) -> Result<Vec<PrismSyncPlan>, tauri::Error> {
-    app.state::<QuadrantHost>()
-        .get_prism_sync_plans(name)
-        .await
-        .map_err(crate::command_error)
-}
-
-#[tauri::command]
-pub async fn apply_modpack_to_prism_instance(
-    name: String,
-    instance_id: String,
-    app: AppHandle,
-) -> Result<(), tauri::Error> {
-    app.state::<QuadrantHost>()
-        .apply_modpack_to_prism_instance(name, instance_id)
-        .await
-        .map_err(crate::command_error)
+host_commands! {
+    get_prism_sync_plans(name: String) -> Vec<PrismSyncPlan>;
+    apply_modpack_to_prism_instance(name: String, instance_id: String) -> ();
 }
 
 #[tauri::command]

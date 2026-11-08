@@ -28,15 +28,8 @@ pub fn frontend_apply_modpack(name: String, app: AppHandle) -> Result<(), tauri:
         .map_err(crate::command_error)
 }
 
-#[tauri::command]
-pub async fn install_modpack(
-    mod_config: InstalledModpack,
-    app: AppHandle,
-) -> Result<(), tauri::Error> {
-    app.state::<QuadrantHost>()
-        .install_modpack(mod_config)
-        .await
-        .map_err(crate::command_error)
+host_commands! {
+    install_modpack(mod_config: InstalledModpack) -> ();
 }
 
 #[tauri::command]

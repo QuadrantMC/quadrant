@@ -2,55 +2,22 @@ use quadrant_core::ports::Shell;
 use quadrant_host::QuadrantHost;
 use tauri::{AppHandle, Manager};
 
+use crate::mc_mod::InstalledMod;
 use crate::tauri_adapter::TauriShell;
 
 use super::general::ModLoader;
 
-#[tauri::command]
-pub async fn delete_mod(
-    modpack_name: String,
-    mod_id: String,
-    app: AppHandle,
-) -> Result<(), tauri::Error> {
-    app.state::<QuadrantHost>()
-        .delete_mod(modpack_name, mod_id)
-        .await
-        .map_err(crate::command_error)
-}
-
-#[tauri::command]
-pub async fn update_modpack(
-    modpack_source: String,
-    name: Option<String>,
-    version: Option<String>,
-    mod_loader: Option<ModLoader>,
-    app: AppHandle,
-) -> Result<(), tauri::Error> {
-    app.state::<QuadrantHost>()
-        .update_modpack(modpack_source, name, version, mod_loader)
-        .await
-        .map_err(crate::command_error)
-}
-
-#[tauri::command]
-pub async fn create_modpack(
-    name: String,
-    version: String,
-    mod_loader: ModLoader,
-    app: AppHandle,
-) -> Result<(), tauri::Error> {
-    app.state::<QuadrantHost>()
-        .create_modpack(name, version, mod_loader)
-        .await
-        .map_err(crate::command_error)
-}
-
-#[tauri::command]
-pub async fn delete_modpack(name: String, app: AppHandle) -> Result<(), tauri::Error> {
-    app.state::<QuadrantHost>()
-        .delete_modpack(name)
-        .await
-        .map_err(crate::command_error)
+host_commands! {
+    delete_mod(modpack_name: String, mod_id: String) -> ();
+    update_modpack(
+        modpack_source: String,
+        name: Option<String>,
+        version: Option<String>,
+        mod_loader: Option<ModLoader>,
+    ) -> ();
+    create_modpack(name: String, version: String, mod_loader: ModLoader) -> ();
+    delete_modpack(name: String) -> ();
+    register_mod(mod_: InstalledMod, modpack: String) -> ();
 }
 
 #[tauri::command]
@@ -70,17 +37,5 @@ pub fn get_modpacks_folder(app: AppHandle) -> Result<String, tauri::Error> {
     app.state::<QuadrantHost>()
         .get_modpacks_folder()
         .map(|path| path.to_string_lossy().into_owned())
-        .map_err(crate::command_error)
-}
-
-#[tauri::command]
-pub async fn register_mod(
-    mod_: crate::mc_mod::InstalledMod,
-    modpack: String,
-    app: AppHandle,
-) -> Result<(), tauri::Error> {
-    app.state::<QuadrantHost>()
-        .register_mod(mod_, modpack)
-        .await
         .map_err(crate::command_error)
 }
