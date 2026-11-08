@@ -1,6 +1,8 @@
 //! Account token helpers and Quadrant cloud entrypoints.
 
 use std::env;
+use std::net::IpAddr;
+use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use once_cell::sync::Lazy;
@@ -49,15 +51,71 @@ fn now_unix_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// Set by the host from `--api-url`. A lock instead of the process
+/// environment, which isn't safe to write while other threads read it.
+static BACKEND_BASE_URL_OVERRIDE: RwLock<Option<String>> = RwLock::new(None);
+
+/// Whether tokens may be sent to `value`: HTTPS anywhere, plain HTTP only to
+/// this machine, so a development API still works.
+pub fn is_allowed_backend_url(value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    match url.scheme() {
+        "https" => url.host_str().is_some(),
+        "http" => url.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        }),
+        _ => false,
+    }
+}
+
+/// Sets, or with `None` clears, the backend base URL the host was started
+/// with. Fails for a URL that isn't allowed by [`is_allowed_backend_url`].
+pub fn set_backend_base_url_override(value: Option<&str>) -> Result<()> {
+    let value = value.map(str::trim).filter(|value| !value.is_empty());
+    if let Some(value) = value
+        && !is_allowed_backend_url(value)
+    {
+        return Err(anyhow::anyhow!(
+            "the API URL {value:?} must use https (http is only allowed for localhost)"
+        ));
+    }
+    *BACKEND_BASE_URL_OVERRIDE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = value.map(str::to_string);
+    Ok(())
+}
+
 /// Resolves the backend base URL.
-/// Precedence: CLI arg > `QUADRANT_API_BASE_URL` env var at runtime >
-/// `QUADRANT_API_BASE_URL` env var at compile time > hardcoded default.
+/// Precedence: the host's `--api-url` > `QUADRANT_API_BASE_URL` env var at
+/// runtime > `QUADRANT_API_BASE_URL` env var at compile time > hardcoded
+/// default. A value that isn't allowed by [`is_allowed_backend_url`] is
+/// skipped, so tokens never go out over plain HTTP to another machine.
 pub fn backend_base_url() -> String {
-    env::var("QUADRANT_API_BASE_URL")
+    let overridden = BACKEND_BASE_URL_OVERRIDE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let from_env = env::var("QUADRANT_API_BASE_URL")
         .ok()
         .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| qnt_base_url().to_string())
+        .filter(|value| !value.is_empty());
+    [overridden, from_env, Some(qnt_base_url().to_string())]
+        .into_iter()
+        .flatten()
+        .find(|value| {
+            let allowed = is_allowed_backend_url(value);
+            if !allowed {
+                log::error!("Ignoring the API URL {value:?}: it must use https");
+            }
+            allowed
+        })
+        .unwrap_or_else(|| DEFAULT_BACKEND_BASE_URL.to_string())
 }
 
 /// Carries no default `User-Agent`: every account call site sets its own from
@@ -310,5 +368,38 @@ mod tests {
 
         assert!(get_token_refresh_deadline(&store).unwrap().is_none());
         assert!(!account_token_needs_refresh(&store).unwrap());
+    }
+
+    #[test]
+    fn tokens_only_go_over_https_or_to_this_machine() {
+        for allowed in [
+            "https://api.usequadrant.dev/api/v3",
+            "http://localhost:8080",
+            "http://127.0.0.1:3000/api",
+            "http://[::1]:3000",
+        ] {
+            assert!(is_allowed_backend_url(allowed), "{allowed}");
+        }
+        for refused in [
+            "http://api.usequadrant.dev",
+            "http://192.168.1.5:3000",
+            "http://localhost.evil.test",
+            "ftp://localhost",
+            "https://",
+            "not a url",
+            "",
+        ] {
+            assert!(!is_allowed_backend_url(refused), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_refused_override_is_an_error_and_changes_nothing() {
+        let _guard = ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        assert!(set_backend_base_url_override(Some("http://example.test")).is_err());
+        set_backend_base_url_override(Some("https://example.test/api")).unwrap();
+        assert_eq!(backend_base_url(), "https://example.test/api");
+        set_backend_base_url_override(None).unwrap();
+        assert_ne!(backend_base_url(), "https://example.test/api");
     }
 }

@@ -30,6 +30,53 @@ pub const CHANNEL_KEY: &str = "channel";
 /// release of the other app.
 pub const NO_VERSION: &str = "0.0.0";
 
+/// A release version split into what orders it: `26.11.1-gpui-preview.2` is
+/// `([26, 11, 1], "gpui-preview", 2)`.
+fn parse_release_version(version: &str) -> Option<([u64; 3], &str, u64)> {
+    let version = version.strip_prefix('v').unwrap_or(version);
+    let (numbers, suffix) = version.split_once('-').unwrap_or((version, ""));
+    let mut parts = numbers.split('.');
+    let triple = [
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ];
+    if parts.next().is_some() {
+        return None;
+    }
+    // A trailing `.N` counts releases within one channel tag.
+    let (tag, counter) = match suffix.rsplit_once('.') {
+        Some((tag, counter)) => match counter.parse() {
+            Ok(counter) => (tag, counter),
+            Err(_) => (suffix, 0),
+        },
+        None => (suffix, 0),
+    };
+    Some((triple, tag, counter))
+}
+
+/// Whether `candidate` is a release to install over `current`. Within one
+/// release line (the suffix after the number, `stable` in `26.7.0-stable`)
+/// it has to be newer, so a server or channel that answers with an older
+/// signed build can't roll the app back. A different line is a channel
+/// switch, like preview back to stable, and any version counts. Versions
+/// that don't follow `YY.MM.REVISION-<line>` count when they differ.
+pub fn is_update(current: &str, candidate: &str) -> bool {
+    match (
+        parse_release_version(current),
+        parse_release_version(candidate),
+    ) {
+        (Some((current, current_line, current_n)), Some((candidate, line, n))) => {
+            if current_line == line {
+                (candidate, n) > (current, current_n)
+            } else {
+                true
+            }
+        }
+        _ => current != candidate,
+    }
+}
+
 /// One of the two apps sharing the data folder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum App {
@@ -295,6 +342,39 @@ mod tests {
             keys,
             ["stable", "preview", "gpuiPreview", "gpuiExperimental"]
         );
+    }
+
+    #[test]
+    fn a_release_must_be_newer_within_its_line() {
+        for (current, candidate, expected) in [
+            ("26.11.0-stable", "26.11.1-stable", true),
+            ("26.11.0-stable", "26.12.0-stable", true),
+            ("26.11.0-stable", "27.1.0-stable", true),
+            ("26.11.0-stable", "26.11.0-stable", false),
+            ("26.11.1-stable", "26.11.0-stable", false),
+            ("26.11.0-stable", "26.7.9-stable", false),
+            ("26.11.0-stable", "v26.11.1-stable", true),
+            // A channel switch may land on an older number.
+            ("26.11.0-alpha", "26.7.0-stable", true),
+            ("26.11.0-gpui-preview.2", "26.11.0-gpui-preview.3", true),
+            ("26.11.0-gpui-preview.2", "26.11.0-gpui-preview.1", false),
+            ("26.11.0-gpui-preview.2", "26.10.9-gpui-preview.9", false),
+            (
+                "26.11.0-gpui-preview.2",
+                "26.11.0-gpui-experimental.1",
+                true,
+            ),
+            ("0.0.0", "26.7.0-stable", true),
+            // Not a Quadrant version: the old rule, any difference.
+            ("dev", "26.7.0-stable", true),
+            ("dev", "dev", false),
+        ] {
+            assert_eq!(
+                is_update(current, candidate),
+                expected,
+                "{current} -> {candidate}"
+            );
+        }
     }
 
     #[test]

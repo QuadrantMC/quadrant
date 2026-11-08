@@ -185,7 +185,7 @@ fn build_quadrant_host(
         QUADRANT_OAUTH2_CLIENT_SECRET,
         QUADRANT_API_KEY,
     );
-    options.api_base_url = api_base_url.or_else(|| std::env::var("QUADRANT_API_BASE_URL").ok());
+    options.api_base_url = api_base_url;
     options.app_version = app.package_info().version.to_string();
     options.os_name = tauri_plugin_os::platform().to_string().to_uppercase();
     QuadrantHost::new(options)
@@ -698,7 +698,9 @@ async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
         let updater = app
             .updater_builder()
             .endpoints(update_urls)?
-            .version_comparator(|current, update| update.version != current)
+            .version_comparator(|current, update| {
+                quadrant_host::updates::is_update(&current.to_string(), &update.version.to_string())
+            })
             .header("User-Agent", quadrant_core::mc_mod::get_user_agent())?
             // Per read rather than `timeout`, which would cap the whole
             // installer download.

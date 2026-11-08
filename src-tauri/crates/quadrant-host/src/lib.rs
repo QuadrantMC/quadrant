@@ -514,11 +514,7 @@ impl QuadrantHost {
             colog::init();
         });
         fs::create_dir_all(&options.data_dir)?;
-        if let Some(api_base_url) = &options.api_base_url {
-            unsafe {
-                std::env::set_var("QUADRANT_API_BASE_URL", api_base_url);
-            }
-        }
+        quadrant_core::account::set_backend_base_url_override(options.api_base_url.as_deref())?;
 
         let config_store = JsonFileStore::new(options.data_dir.join(&options.config_store_name))?;
         let update_store = JsonFileStore::new(options.data_dir.join(&options.update_store_name))?;
