@@ -184,6 +184,12 @@ pub fn is_cloud_sync_conflict(error: &anyhow::Error) -> bool {
     ErrorCode::classify(error) == Some(ErrorCode::CloudSyncNewer)
 }
 
+/// Whether an error means there is no usable session, for example because the
+/// refresh token was refused and the credentials were cleared.
+pub fn is_signed_out(error: &anyhow::Error) -> bool {
+    ErrorCode::classify(error) == Some(ErrorCode::SignedOut)
+}
+
 /// Converts an error for display by a host: a recognised failure becomes its
 /// [`ErrorCode`] key, anything else passes through unchanged.
 ///

@@ -8,8 +8,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::{
     Result,
     account::{
-        account_http_client, backend_base_url, get_account_token, get_refresh_token, set_secret,
-        set_token_refresh_deadline,
+        account_http_client, backend_base_url, clear_account_token, get_account_token,
+        get_refresh_token, set_secret, set_token_refresh_deadline,
     },
     ports::SecretStore,
 };
@@ -21,6 +21,11 @@ const DEFAULT_NOTIFICATION_HISTORY_SINCE: &str = "1970-01-01T00:00:00Z";
 const EMPTY_NOTIFICATION_HISTORY_BODY: &str = "Notification history request returned an empty body";
 const EMPTY_ACCOUNT_INFO_BODY: &str = "Account info request returned an empty body";
 const EMPTY_OAUTH_BODY: &str = "OAuth2 token endpoint returned an empty body";
+
+/// One refresh at a time. The background worker and every request retried
+/// after a 401 can ask at once, and a refresh token the server rotates is
+/// spent by the first of them, so the rest would present a dead one.
+static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Account profile returned by the Quadrant backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +224,10 @@ pub struct PendingModpackUpdate {
 }
 
 /// Uses the refresh token to obtain and persist a fresh access token.
+///
+/// A refresh token the server refuses (`invalid_grant`) can never work again,
+/// so the stored credentials are cleared and the error is
+/// [`ErrorCode::SignedOut`](crate::error::ErrorCode::SignedOut).
 pub async fn try_refresh_token(
     secret_store: &impl SecretStore,
     client_id: &str,
@@ -226,6 +235,12 @@ pub async fn try_refresh_token(
     user_agent: &str,
 ) -> Result<()> {
     log::info!("Attempting token refresh");
+    let stale_access_token = secret_store.get_secret("accountToken")?;
+    let _refreshing = REFRESH_LOCK.lock().await;
+    if secret_store.get_secret("accountToken")? != stale_access_token {
+        log::info!("The access token was refreshed while this refresh waited");
+        return Ok(());
+    }
     let refresh_token = get_refresh_token(secret_store)?;
     let mut body = HashMap::new();
     body.insert("client_id", client_id);
@@ -240,7 +255,16 @@ pub async fn try_refresh_token(
         .send()
         .await?;
 
-    let res = parse_oauth_token_response(response, "Token refresh failed").await?;
+    let status = response.status();
+    let raw = response.text().await?;
+    if is_refused_grant(status, &raw) {
+        log::warn!("The refresh token was refused ({status}); clearing the session");
+        clear_account_token(secret_store)?;
+        return Err(anyhow::anyhow!("Token refresh failed with {status}: the session has ended")
+            .context(crate::error::ErrorCode::SignedOut));
+    }
+    let res: OAuth2Response =
+        parse_json_body(status, &raw, "Token refresh failed", EMPTY_OAUTH_BODY)?;
     set_secret(secret_store, "accountToken", &res.access_token)?;
     if let Some(new_refresh_token) = res.refresh_token {
         set_secret(secret_store, "refreshToken", &new_refresh_token)?;
@@ -454,6 +478,14 @@ async fn parse_oauth_token_response(
     parse_json_response(response, error_prefix, EMPTY_OAUTH_BODY).await
 }
 
+/// Whether the token endpoint refused the grant itself (RFC 6749 section
+/// 5.2), as opposed to failing for a reason a later retry can get past.
+fn is_refused_grant(status: StatusCode, body: &str) -> bool {
+    status == StatusCode::BAD_REQUEST
+        && serde_json::from_str::<serde_json::Value>(body)
+            .is_ok_and(|body| body["error"] == "invalid_grant")
+}
+
 async fn parse_json_response<T: serde::de::DeserializeOwned>(
     response: reqwest::Response,
     error_prefix: &str,
@@ -461,8 +493,17 @@ async fn parse_json_response<T: serde::de::DeserializeOwned>(
 ) -> Result<T> {
     let status = response.status();
     let response_raw = response.text().await?;
+    parse_json_body(status, &response_raw, error_prefix, empty_body_error)
+}
+
+fn parse_json_body<T: serde::de::DeserializeOwned>(
+    status: StatusCode,
+    response_raw: &str,
+    error_prefix: &str,
+    empty_body_error: &str,
+) -> Result<T> {
     if !status.is_success() {
-        let body_preview = response_preview(&response_raw);
+        let body_preview = response_preview(response_raw);
         let error = anyhow::anyhow!("{} with {}: {}", error_prefix, status, body_preview);
         return Err(match crate::error::ErrorCode::from_status(status) {
             Some(code) => error.context(code),
@@ -633,6 +674,97 @@ mod tests {
         assert_eq!(
             store.get_secret("refreshToken").unwrap().as_deref(),
             Some("current-account-refresh")
+        );
+    }
+
+    #[tokio::test]
+    async fn refused_refresh_token_clears_the_session() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        server.mock(|when, then| {
+            when.method(POST).path("/oauth2/token");
+            then.status(400).json_body(serde_json::json!({
+                "error": "invalid_grant",
+                "error_description": "Refresh token expired"
+            }));
+        });
+        let store = StatefulSecretStore::default();
+        store.set_secret("accountToken", "old-access").unwrap();
+        store.set_secret("refreshToken", "dead-refresh").unwrap();
+
+        let error = try_refresh_token(&store, "client-id", "client-secret", "test-agent")
+            .await
+            .unwrap_err();
+
+        assert!(crate::error::is_signed_out(&error));
+        assert_eq!(store.get_secret("accountToken").unwrap(), None);
+        assert_eq!(store.get_secret("refreshToken").unwrap(), None);
+        assert!(!crate::account::account_token_needs_refresh(&store).unwrap());
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_for_another_reason_keeps_the_session() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        server.mock(|when, then| {
+            when.method(POST).path("/oauth2/token");
+            then.status(503).body("maintenance");
+        });
+        let store = StatefulSecretStore::default();
+        store.set_secret("refreshToken", "live-refresh").unwrap();
+
+        let error = try_refresh_token(&store, "client-id", "client-secret", "test-agent")
+            .await
+            .unwrap_err();
+
+        assert!(!crate::error::is_signed_out(&error));
+        assert_eq!(
+            store.get_secret("refreshToken").unwrap().as_deref(),
+            Some("live-refresh")
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_refreshes_spend_the_refresh_token_once() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let rotate = server.mock(|when, then| {
+            when.method(POST)
+                .path("/oauth2/token")
+                .body_includes("refresh_token=first-refresh");
+            then.status(200)
+                .delay(std::time::Duration::from_millis(200))
+                .json_body(serde_json::json!({
+                    "access_token": "second-access",
+                    "refresh_token": "second-refresh",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                    "scope": "profile:read"
+                }));
+        });
+        let store = StatefulSecretStore::default();
+        store.set_secret("accountToken", "first-access").unwrap();
+        store.set_secret("refreshToken", "first-refresh").unwrap();
+
+        let refresh = || try_refresh_token(&store, "client-id", "client-secret", "test-agent");
+        let (first, second, third) = tokio::join!(refresh(), refresh(), refresh());
+        first.unwrap();
+        second.unwrap();
+        third.unwrap();
+
+        rotate.assert_calls(1);
+        assert_eq!(
+            store.get_secret("refreshToken").unwrap().as_deref(),
+            Some("second-refresh")
         );
     }
 

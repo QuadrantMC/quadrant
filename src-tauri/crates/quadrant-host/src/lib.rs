@@ -39,7 +39,7 @@ use quadrant_core::{
         content_location_header, content_subfolder, copy_content_files, delete_content_files,
         parse_location_id, prism_location_id,
     },
-    error::is_cloud_sync_conflict,
+    error::{is_cloud_sync_conflict, is_signed_out},
     events::BackendEvent,
     mc_mod::{
         GetModArgs, GlobalSearchModsArgs, IdentifiedMod, MinecraftVersion, Mod, ModType,
@@ -1819,10 +1819,21 @@ impl QuadrantHost {
     async fn token_refresh_loop(&self) {
         let mut interval =
             tokio::time::interval(Duration::from_secs(TOKEN_REFRESH_CHECK_INTERVAL_SECS));
+        let mut failures = 0;
+        let mut ticks_to_skip = 0;
         loop {
             interval.tick().await;
-            if let Err(error) = self.refresh_account_token_if_due().await {
-                log::warn!("Proactive token refresh worker failed: {error}");
+            if ticks_to_skip > 0 {
+                ticks_to_skip -= 1;
+                continue;
+            }
+            match self.refresh_account_token_if_due().await {
+                Ok(()) => failures = 0,
+                Err(error) => {
+                    failures += 1;
+                    ticks_to_skip = token_refresh_ticks_to_skip(failures);
+                    log::warn!("Proactive token refresh worker failed: {error}");
+                }
             }
         }
     }
@@ -1837,18 +1848,22 @@ impl QuadrantHost {
     }
 
     /// Forces an access token refresh using the stored refresh token and signals
-    /// the frontend to re-read account state.
+    /// the frontend to re-read account state, also when the refresh ended the
+    /// session.
     pub async fn refresh_account_token(&self) -> Result<()> {
-        try_refresh_token(
+        let refreshed = try_refresh_token(
             &self.inner.secret_store,
             &self.inner.options.oauth_client_id,
             &self.inner.options.oauth_client_secret,
             &self.inner.options.user_agent,
         )
-        .await?;
-        self.inner
-            .event_sink
-            .emit("recheckAccountToken", Value::Null)
+        .await;
+        if refreshed.is_ok() || refreshed.as_ref().is_err_and(is_signed_out) {
+            self.inner
+                .event_sink
+                .emit("recheckAccountToken", Value::Null)?;
+        }
+        refreshed
     }
 
     async fn bootstrap_notifications(&self) -> Result<()> {
@@ -2470,6 +2485,13 @@ fn merge_notifications_and_collect_updates(
     }
 }
 
+/// After `failures` refreshes in a row failed, how many checks to let pass
+/// before the next try: 1, 3, 7, ... up to 31, so an unreachable server is
+/// asked at most every 32 minutes instead of every minute.
+fn token_refresh_ticks_to_skip(failures: u32) -> u32 {
+    (1 << failures.min(5)) - 1
+}
+
 /// A connection that stayed open this long was healthy, so the next drop is
 /// retried quickly again. One the server accepts and then drops at once keeps
 /// backing off instead of being retried every second.
@@ -2832,6 +2854,12 @@ mod tests {
         path::{Path, PathBuf},
     };
     use tempfile::tempdir;
+
+    #[test]
+    fn failed_token_refreshes_back_off() {
+        let skips: Vec<_> = (1..=7).map(super::token_refresh_ticks_to_skip).collect();
+        assert_eq!(skips, [1, 3, 7, 15, 31, 31, 31]);
+    }
 
     #[test]
     fn reconnects_back_off_until_a_connection_stays_up() {
