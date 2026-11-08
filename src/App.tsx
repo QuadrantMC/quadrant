@@ -619,9 +619,7 @@ function App() {
                           (isSelected ? "bg-slate-700" : "bg-slate-800")
                         }
                         key={i}
-                        onClick={async () => {
-                          await config.set("lastPageName", p.name);
-                          await config.save();
+                        onClick={() => {
                           setPage(p);
                           setContent(p);
                           contentHistoryRef.current = [
@@ -640,6 +638,12 @@ function App() {
                           });
                         }}
                       >
+                          // Remembering the page must never hold up, or fail,
+                          // the navigation itself.
+                          config
+                            .set("lastPageName", p.name)
+                            .then(() => config.save())
+                            .catch(console.error);
                         <div className="grid place-content-center ">
                           {p.icon}
                         </div>
