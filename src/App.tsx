@@ -330,10 +330,9 @@ function App() {
         if (isUnmounted) {
           return;
         }
-        console.log("deep link:", urls);
         const showUnsupported = () => {
           contextFunctions.setSnackbar({
-            message: t("unsupportedDownload"),
+            message: quadrantLocale.t("unsupportedDownload"),
             className: "bg-red-700",
             timeout: 5000,
           });
@@ -341,7 +340,6 @@ function App() {
         for (const gottenUrl of urls) {
           try {
             const action = resolveDeepLink(gottenUrl);
-            console.log("deep link action:", gottenUrl, action);
             await currentWindow.setEnabled(true);
             await currentWindow.setFocus();
 
