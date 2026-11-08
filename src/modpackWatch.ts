@@ -52,7 +52,7 @@ export async function watchModpacks(
         async () => {
           if (disposed) return;
           await watchTree();
-          onChange();
+          if (!disposed) onChange();
         },
         { delayMs: 50 },
       ),
