@@ -4,8 +4,6 @@
  * @format
  */
 
-import type { AccountNotification, Article, ModProgress } from "../intefaces";
-
 export const HOST_COMMANDS = [
   "get_modpacks",
   "frontend_apply_modpack",
@@ -82,30 +80,8 @@ export const ProgressBarStatus = {
 export type ProgressBarStatusValue =
   (typeof ProgressBarStatus)[keyof typeof ProgressBarStatus];
 
-export type UpdateDownloadProgressPayload = number;
-
 /** The app a download switches to, or `null` for an update of this one. */
 export type UpdateSwitchPayload = "quadrantNative" | null;
-
-export interface QuadrantShareSubmissionPayload {
-  code?: string | number;
-  uses_left?: number;
-}
-
-export interface DesktopEventMap {
-  modDownloadProgress: ModProgress;
-  modInstallProgress: ModProgress;
-  modpackDownloadProgress: number;
-  quadrantExportProgress: number;
-  quadrantShareSubmission: QuadrantShareSubmissionPayload;
-  refreshNotifications: AccountNotification[];
-  recheckAccountToken: null;
-  refreshSyncedModpacks: string | null;
-  updateDownloadProgress: UpdateDownloadProgressPayload;
-  updateSwitch: UpdateSwitchPayload;
-}
-
-export type DesktopEventName = keyof DesktopEventMap;
 
 export interface DesktopDialogOptions {
   mode?: "open" | "save";
@@ -136,5 +112,3 @@ export interface DesktopBackendEventEnvelope<T = unknown> {
   event: string;
   payload: T;
 }
-
-export type DesktopNewsArticle = Article;

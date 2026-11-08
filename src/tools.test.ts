@@ -38,7 +38,6 @@ import {
   installMod,
   openContentFolder,
   shareModpack,
-  shuffle,
 } from "./tools";
 
 beforeEach(() => {
@@ -325,16 +324,6 @@ describe("installMod", () => {
       modType: ModType.ResourcePack,
       fileId: undefined,
     });
-  });
-});
-
-describe("shuffle", () => {
-  it("permutes in place, preserving the multiset of elements", () => {
-    const arr = Array.from({ length: 50 }, (_, i) => i);
-    const copy = [...arr];
-    shuffle(arr);
-    expect(arr).toHaveLength(copy.length);
-    expect([...arr].sort((a, b) => a - b)).toEqual(copy);
   });
 });
 

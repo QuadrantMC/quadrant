@@ -9,7 +9,6 @@
     "core:app:default",
     "fs:default",
     "os:default",
-    "http:default",
     {
       "identifier": "fs:allow-watch",
       "allow": [
@@ -55,10 +54,6 @@
     "core:window:allow-set-decorations",
     "core:window:allow-set-progress-bar",
     "oauth:allow-start",
-    "oauth:allow-cancel",
-    {
-      "identifier": "http:default",
-      "allow": ["https://api.mrquantumoff.dev/api/v3/**"]
-    }
+    "oauth:allow-cancel"
   ]
 }

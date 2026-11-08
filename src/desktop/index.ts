@@ -193,10 +193,6 @@ export async function onOAuthUrl(listener: (url: string) => void) {
   return withRuntime((runtime) => runtime.onOAuthUrl(listener));
 }
 
-export async function desktopFetch(input: string, init?: RequestInit) {
-  return withRuntime((runtime) => runtime.fetch(input, init));
-}
-
 export async function isProductionBuild() {
   return withRuntime(async (runtime) => runtime.isProductionBuild());
 }

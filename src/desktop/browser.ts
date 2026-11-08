@@ -171,9 +171,6 @@ export const browserRuntime: RuntimeAdapter = {
   async onOAuthUrl() {
     return () => {};
   },
-  async fetch(input: string, init?: RequestInit) {
-    return fetch(input, init);
-  },
   isProductionBuild() {
     return import.meta.env.PROD;
   },

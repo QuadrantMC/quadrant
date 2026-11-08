@@ -66,6 +66,5 @@ export interface RuntimeAdapter {
   startOAuthServer(options: DesktopOAuthStartOptions): Promise<number>;
   cancelOAuthServer(port: number): Promise<void>;
   onOAuthUrl(listener: (url: string) => void): Promise<UnlistenFn>;
-  fetch(input: string, init?: RequestInit): Promise<Response>;
   isProductionBuild(): boolean;
 }

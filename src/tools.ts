@@ -140,10 +140,6 @@ export async function getDefaultMinecraftFolder(): Promise<string> {
   return await invoke<string>("get_default_minecraft_folder");
 }
 
-export async function initConfig() {
-  return await invoke("init_config");
-}
-
 export async function deleteMod(modpackName: string, modId: string) {
   console.log("Removing mod from: " + modpackName + "\nMod: " + modId);
   await invoke("delete_mod", { modpackName: modpackName, modId: modId });
@@ -214,23 +210,6 @@ export async function deleteModpack(name: string) {
   await invoke("delete_modpack", {
     name: name,
   });
-}
-
-export function shuffle(array: any[]) {
-  let currentIndex = array.length;
-
-  // While there remain elements to shuffle...
-  while (currentIndex != 0) {
-    // Pick a remaining element...
-    const randomIndex = Math.floor(Math.random() * currentIndex);
-    currentIndex--;
-
-    // And swap it with the current element.
-    [array[currentIndex], array[randomIndex]] = [
-      array[randomIndex],
-      array[currentIndex],
-    ];
-  }
 }
 
 export async function openIn(url: string) {

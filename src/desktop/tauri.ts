@@ -14,7 +14,6 @@ import {
   save as saveDialog,
 } from "@tauri-apps/plugin-dialog";
 import { watch as watchPath } from "@tauri-apps/plugin-fs";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -267,9 +266,6 @@ export const tauriRuntime: RuntimeAdapter = {
   },
   async onOAuthUrl(listener) {
     return onOAuthUrl(listener);
-  },
-  async fetch(input: string, init?: RequestInit) {
-    return tauriFetch(input, init);
   },
   isProductionBuild() {
     return import.meta.env.PROD;
