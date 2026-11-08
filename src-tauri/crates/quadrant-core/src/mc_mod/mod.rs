@@ -935,7 +935,10 @@ pub fn install_local_file(
     Ok(updated_modpack)
 }
 
-/// Downloads a remote file once and installs it into every requested root.
+/// Downloads a provider file once and installs it into every requested root.
+/// The caller names the file, so its URL must be on the CDN of `source`, and
+/// an Online `source`, which would allow any host, is refused: only
+/// [`check_mod_updates`] produces these files, and never for Online mods.
 ///
 /// An empty `install_roots` is
 /// [`ErrorCode::InvalidRequest`](crate::error::ErrorCode::InvalidRequest).
@@ -951,9 +954,10 @@ pub async fn install_remote_file(
     if install_roots.is_empty() {
         return Err(anyhow::Error::from(crate::error::ErrorCode::InvalidRequest));
     }
+    if source == ModSource::Online {
+        return Err(anyhow!("unsupportedDownload"));
+    }
     ensure_downloadable(&file)?;
-    // Apply the same URL policy that later delete/install-modpack paths
-    // enforce, so every manifest entry this creates can be removed again.
     crate::modpacks::safe_download_file_name(&file.download_url, &source)?;
     let downloaded_file = get_file(file, id.clone(), event_sink).await?;
     let mod_to_install = enrich_installed_mod(InstalledMod::minimal(
@@ -1640,10 +1644,16 @@ mod tests {
     #[tokio::test]
     async fn install_remote_file_downloads_once_and_places_the_file_in_every_root() {
         let _guard = crate::mc_mod::cache::tests::set_cache_dir();
+        let _http = crate::mc_mod::http::PROVIDER_HTTP_TEST_MUTEX.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let roots = [dir.path().join("minecraft"), dir.path().join("instance")];
         let bytes = b"pack bytes";
         let server = httpmock::MockServer::start();
+        // The name lookup after the install gets a 404 instead of reaching
+        // Modrinth.
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_MODRINTH_API_BASE", server.base_url());
+        }
         let download = server.mock(|when, then| {
             when.method(httpmock::Method::GET).path("/Faithful.zip");
             then.status(200).body(bytes);
@@ -1664,13 +1674,15 @@ mod tests {
             file.clone(),
             ModType::ResourcePack,
             None,
-            ModSource::Online,
+            ModSource::Modrinth,
             "faithful".to_string(),
         )
-        .await
-        .unwrap();
+        .await;
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");
+        }
 
-        assert!(updated.is_none());
+        assert!(updated.unwrap().is_none());
         download.assert_calls(1);
         for root in &roots {
             assert_eq!(
@@ -1685,13 +1697,54 @@ mod tests {
             file,
             ModType::ResourcePack,
             None,
-            ModSource::Online,
+            ModSource::Modrinth,
             "faithful".to_string(),
         )
         .await
         .unwrap_err();
         assert!(error.to_string().contains("errorInvalidRequest"));
         download.assert_calls(1);
+    }
+
+    #[tokio::test]
+    async fn install_remote_file_downloads_only_from_the_named_providers_cdn() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = [dir.path().join("minecraft")];
+        let events = CollectingEvents::default();
+        let file = |url: &str| UniversalModFile {
+            id: None,
+            file_name: "x.jar".to_string(),
+            download_url: url.to_string(),
+            sha1: "0000000000000000000000000000000000000000".to_string(),
+            sha512: None,
+            size: 1,
+        };
+        let attempts = [
+            ("https://evil.example/x.jar", ModSource::Online),
+            ("https://cdn.modrinth.com/data/x.jar", ModSource::Online),
+            ("https://evil.example/x.jar", ModSource::Modrinth),
+            ("https://edge.forgecdn.net/files/x.jar", ModSource::Modrinth),
+            ("https://cdn.modrinth.com/data/x.jar", ModSource::CurseForge),
+        ];
+        for (url, source) in attempts {
+            let error = install_remote_file(
+                &roots,
+                &events,
+                file(url),
+                ModType::Mod,
+                None,
+                source.clone(),
+                "x".to_string(),
+            )
+            .await
+            .unwrap_err();
+            let error = error.to_string();
+            assert!(
+                error.contains("unsupportedDownload") || error.contains("errorUnsafeDownload"),
+                "{url} {source:?}: {error}"
+            );
+        }
+        assert!(!roots[0].exists());
     }
 
     #[tokio::test]
