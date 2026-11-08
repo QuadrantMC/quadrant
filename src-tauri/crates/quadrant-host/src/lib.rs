@@ -183,21 +183,39 @@ struct HostRuntimeState {
 #[derive(Clone)]
 struct JsonFileStore {
     path: PathBuf,
-    values: Arc<Mutex<HashMap<String, Value>>>,
+    cached: Arc<Mutex<CachedValues>>,
 }
+
+/// The values as last read or written, with the file's stamp at that time.
+#[derive(Default)]
+struct CachedValues {
+    values: HashMap<String, Value>,
+    stamp: Option<FileStamp>,
+}
+
+/// What a file's metadata says about its contents. `None` when the file
+/// does not exist.
+type FileStamp = Option<(std::time::SystemTime, u64)>;
+
+/// A file changed this recently may change again within the timestamp
+/// granularity of some file systems, so its stamp proves nothing yet.
+const STAMP_SETTLE_TIME: Duration = Duration::from_secs(2);
 
 impl JsonFileStore {
     fn new(path: PathBuf) -> Result<Self> {
         let store = Self {
             path,
-            values: Arc::new(Mutex::new(HashMap::new())),
+            cached: Arc::new(Mutex::new(CachedValues::default())),
         };
         let values = store.load_or_set_aside()?;
-        *store
-            .values
-            .lock()
-            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))? = values;
+        store.lock_cached()?.values = values;
         Ok(store)
+    }
+
+    fn lock_cached(&self) -> Result<std::sync::MutexGuard<'_, CachedValues>> {
+        self.cached
+            .lock()
+            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))
     }
 
     /// The values on disk. A file that does not parse (a bad hand edit) is
@@ -259,61 +277,76 @@ impl JsonFileStore {
         Ok(quadrant_core::modpacks::lock_file(Path::new(&lock_path))?)
     }
 
-    fn reload(&self, values: &mut HashMap<String, Value>) -> Result<()> {
+    fn stamp(&self) -> Result<FileStamp> {
+        match fs::metadata(&self.path) {
+            Ok(metadata) => Ok(Some((metadata.modified()?, metadata.len()))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn reload(&self, cached: &mut CachedValues) -> Result<()> {
+        // The stamp is taken first, so a write landing during the read leaves
+        // a stamp that no longer matches and the next read loads it.
+        let stamp = self.stamp()?;
         // Do not let a failed reload turn the next write into an overwrite of
         // disk contents using a stale in-memory snapshot.
-        *values = Self::read_values_from_disk(&self.path)?;
+        cached.values = Self::read_values_from_disk(&self.path)?;
+        cached.stamp = Some(stamp);
         Ok(())
     }
 
-    fn delete_key(&self, key: &str) -> Result<()> {
-        let mut values = self
-            .values
-            .lock()
-            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))?;
-        let _lock = self.lock_file()?;
-        self.reload(&mut values)?;
-        values.remove(key);
-        self.persist(&values)
+    /// Reloads only when the file changed since it was last read or written,
+    /// so the many settings reads per command don't each parse config.json.
+    fn refresh(&self, cached: &mut CachedValues) -> Result<()> {
+        let stamp = self.stamp()?;
+        let settled = stamp.is_none_or(|(modified, _)| {
+            modified.elapsed().is_ok_and(|age| age >= STAMP_SETTLE_TIME)
+        });
+        if settled && cached.stamp == Some(stamp) {
+            return Ok(());
+        }
+        self.reload(cached)
     }
 
-    fn persist(&self, values: &HashMap<String, Value>) -> Result<()> {
+    fn delete_key(&self, key: &str) -> Result<()> {
+        let mut cached = self.lock_cached()?;
+        let _lock = self.lock_file()?;
+        self.reload(&mut cached)?;
+        cached.values.remove(key);
+        self.persist(&mut cached)
+    }
+
+    fn persist(&self, cached: &mut CachedValues) -> Result<()> {
         quadrant_core::modpacks::write_file_atomically(
             &self.path,
-            serde_json::to_vec_pretty(&Value::Object(values.clone().into_iter().collect()))?,
+            serde_json::to_vec_pretty(&Value::Object(cached.values.clone().into_iter().collect()))?,
         )?;
+        cached.stamp = Some(self.stamp()?);
         Ok(())
     }
 }
 
 impl SettingsStore for JsonFileStore {
     fn get_value(&self, key: &str) -> Result<Option<Value>> {
-        let mut values = self
-            .values
-            .lock()
-            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))?;
-        self.reload(&mut values)?;
-        Ok(values.get(key).cloned())
+        let mut cached = self.lock_cached()?;
+        self.refresh(&mut cached)?;
+        Ok(cached.values.get(key).cloned())
     }
 
     fn set_value(&self, key: &str, value: Value) -> Result<()> {
-        let mut values = self
-            .values
-            .lock()
-            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))?;
+        let mut cached = self.lock_cached()?;
         let _lock = self.lock_file()?;
-        self.reload(&mut values)?;
-        values.insert(key.to_string(), value);
-        self.persist(&values)
+        self.reload(&mut cached)?;
+        cached.values.insert(key.to_string(), value);
+        self.persist(&mut cached)
     }
 
     fn entries(&self) -> Result<Vec<(String, Value)>> {
-        let mut values = self
+        let mut cached = self.lock_cached()?;
+        self.refresh(&mut cached)?;
+        Ok(cached
             .values
-            .lock()
-            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))?;
-        self.reload(&mut values)?;
-        Ok(values
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect())
@@ -3082,6 +3115,42 @@ mod tests {
             JsonFileStore::new(path).unwrap().entries().unwrap().len(),
             80
         );
+    }
+
+    #[test]
+    fn json_store_reads_the_file_again_only_when_it_changed() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("config.json");
+        let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let write_aged = |contents: &str, modified: std::time::SystemTime| {
+            fs::write(&path, contents).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+        };
+        write_aged(r#"{"mcFolder":"/a"}"#, an_hour_ago);
+        let store = JsonFileStore::new(path.clone()).unwrap();
+        assert_eq!(store.get_string("mcFolder").unwrap().as_deref(), Some("/a"));
+
+        // Same size and time: the cached copy answers without a parse.
+        write_aged(r#"{"mcFolder":"/b"}"#, an_hour_ago);
+        assert_eq!(store.get_string("mcFolder").unwrap().as_deref(), Some("/a"));
+
+        // Another process's write moves the stamp.
+        write_aged(
+            r#"{"mcFolder":"/b"}"#,
+            an_hour_ago + std::time::Duration::from_secs(60),
+        );
+        assert_eq!(store.get_string("mcFolder").unwrap().as_deref(), Some("/b"));
+
+        let other = JsonFileStore::new(path.clone()).unwrap();
+        other.set_string("mcFolder", "/c".to_string()).unwrap();
+        assert_eq!(store.get_string("mcFolder").unwrap().as_deref(), Some("/c"));
+        fs::remove_file(&path).unwrap();
+        assert_eq!(store.get_string("mcFolder").unwrap(), None);
     }
 
     #[test]
