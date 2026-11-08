@@ -214,7 +214,7 @@ export async function deleteModpack(name: string) {
 }
 
 export async function openIn(url: string) {
-  console.log("Opening link: " + url);
+  // Not logged: the sign-in URL carries the OAuth state and loopback port.
   await openExternal(url);
 }
 
