@@ -1,7 +1,11 @@
 /** @format */
 
 import { describe, expect, it } from "vitest";
-import { describeError, isCloudSyncNewerError } from "./errors";
+import {
+  describeError,
+  isCloudSyncNewerError,
+  isModpackMissingError,
+} from "./errors";
 import quadrantLocale from "./i18n";
 import en from "./locales/en.json";
 
@@ -99,5 +103,16 @@ describe("isCloudSyncNewerError", () => {
     42,
   ])("does not mistake %o for the conflict", (raw) => {
     expect(isCloudSyncNewerError(raw)).toBe(false);
+  });
+});
+
+describe("isModpackMissingError", () => {
+  it("recognizes the backend's missing-modpack code only", () => {
+    expect(isModpackMissingError("errorModpackMissing")).toBe(true);
+    expect(isModpackMissingError(new Error("errorModpackMissing"))).toBe(true);
+    expect(isModpackMissingError("errorFileAccess")).toBe(false);
+    expect(isModpackMissingError("the errorModpackMissing happened")).toBe(
+      false,
+    );
   });
 });

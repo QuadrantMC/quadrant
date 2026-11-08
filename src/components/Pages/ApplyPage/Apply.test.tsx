@@ -16,6 +16,9 @@ const syncModpack = vi.fn();
 const installModpack = vi.fn();
 const getPrismInstances = vi.fn();
 const invoke = vi.fn();
+const applyModpack = vi.fn();
+const createModpack = vi.fn();
+const deleteModpack = vi.fn();
 
 const storeGet = vi.fn();
 const joinPath = vi.fn();
@@ -23,9 +26,9 @@ const watch = vi.fn();
 const listen = vi.fn();
 
 vi.mock("../../../tools", () => ({
-  applyModpack: vi.fn(),
-  createModpack: vi.fn(),
-  deleteModpack: vi.fn(),
+  applyModpack: (...a: unknown[]) => applyModpack(...a),
+  createModpack: (...a: unknown[]) => createModpack(...a),
+  deleteModpack: (...a: unknown[]) => deleteModpack(...a),
   exportModpack: vi.fn(),
   getAccountInfo: (...a: unknown[]) => getAccountInfo(...a),
   getSyncedModpacks: (...a: unknown[]) => getSyncedModpacks(...a),
@@ -545,7 +548,7 @@ describe("ApplyPage", () => {
     await user.paste("  1234567  ");
 
     await waitFor(() =>
-      expect(screen.getByRole("textbox")).toHaveValue("1234567"),
+      expect(screen.getByRole("textbox")).toHaveValue("  1234567  "),
     );
     expect(
       screen.getByRole("button", { name: /^download$/i }),
@@ -649,5 +652,101 @@ describe("ApplyPage", () => {
     await act(async () => resolveOld([cloudPack({ name: "Stale" })]));
     expect(await screen.findByText("Latest")).toBeInTheDocument();
     expect(screen.queryByText("Stale")).not.toBeInTheDocument();
+  });
+
+  it("lets a space be typed in the search field", async () => {
+    getModpacks.mockResolvedValue([
+      pack({ name: "My Pack" }),
+      pack({ name: "Other" }),
+    ]);
+    render(<ApplyPage />);
+    await screen.findByText("My Pack");
+    await userEvent.type(screen.getByRole("textbox"), "my pack");
+    expect(screen.getByRole("textbox")).toHaveValue("my pack");
+    expect(screen.getByText("My Pack")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText("Other")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps the newest modpack listing when watch refreshes resolve out of order", async () => {
+    getModpacks.mockResolvedValue([pack({ name: "Initial" })]);
+    render(<ApplyPage />);
+    await screen.findByText("Initial");
+    await waitFor(() => expect(watchCallback).toBeTypeOf("function"));
+
+    let resolveOlder!: (packs: unknown[]) => void;
+    let resolveNewer!: (packs: unknown[]) => void;
+    getModpacks
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOlder = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveNewer = resolve;
+        }),
+      );
+    act(() => {
+      watchCallback?.();
+      watchCallback?.();
+    });
+    await act(async () => resolveNewer([pack({ name: "Newest" })]));
+    await act(async () => resolveOlder([pack({ name: "Older" })]));
+
+    expect(screen.getByText("Newest")).toBeInTheDocument();
+    expect(screen.queryByText("Older")).not.toBeInTheDocument();
+  });
+
+  it("still lists local modpacks when the version list cannot load", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    getVersions.mockRejectedValue(new Error("offline"));
+    getModpacks.mockResolvedValue([pack({ name: "On Disk" })]);
+    render(<ApplyPage />);
+    expect(await screen.findByText("On Disk")).toBeInTheDocument();
+    await waitFor(() => expect(watch).toHaveBeenCalledTimes(2));
+    error.mockRestore();
+  });
+
+  describe("clear button", () => {
+    const clear = () => screen.getByRole("button", { name: "Clear" });
+
+    it("replaces the temporary modpack and applies it", async () => {
+      deleteModpack.mockRejectedValue(new Error("errorModpackMissing"));
+      render(
+        <SpiedContent>
+          <ApplyPage />
+        </SpiedContent>,
+      );
+      await waitFor(() => expect(getVersions).toHaveBeenCalled());
+      await screen.findByRole("button", { name: "Clear" });
+      await act(async () => {});
+      await userEvent.click(clear());
+      await waitFor(() => expect(applyModpack).toHaveBeenCalledWith("free"));
+      expect(createModpack).toHaveBeenCalledWith(
+        "free",
+        "1.20.1",
+        ModLoader.Unknown,
+      );
+      expect(setSnackbar).not.toHaveBeenCalled();
+    });
+
+    it("reports a failure instead of swallowing it", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      deleteModpack.mockRejectedValue(new Error("errorFileInUse"));
+      render(
+        <SpiedContent>
+          <ApplyPage />
+        </SpiedContent>,
+      );
+      await screen.findByRole("button", { name: "Clear" });
+      await act(async () => {});
+      await userEvent.click(clear());
+      await waitFor(() => expect(setSnackbar).toHaveBeenCalled());
+      expect(createModpack).not.toHaveBeenCalled();
+      expect(applyModpack).not.toHaveBeenCalled();
+      error.mockRestore();
+    });
   });
 });

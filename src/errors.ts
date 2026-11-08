@@ -19,6 +19,11 @@ export function isCloudSyncNewerError(error: unknown): boolean {
   return rawMessage(error) === "errorCloudSyncNewer";
 }
 
+/** Whether a caught error is the backend reporting an unknown modpack name. */
+export function isModpackMissingError(error: unknown): boolean {
+  return rawMessage(error) === "errorModpackMissing";
+}
+
 /**
  * The text to show for a caught error.
  *

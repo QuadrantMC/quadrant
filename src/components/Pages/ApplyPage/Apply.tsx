@@ -1,6 +1,6 @@
 /** @format */
 
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import {
   LocalModpack,
   MinecraftVersion,
@@ -27,7 +27,11 @@ import { MdAdd, MdCheck, MdClear, MdFolder } from "react-icons/md";
 import { ContentContext } from "../../../intefaces";
 import LocalModpackCard from "./LocalModpackCard";
 import ModpackEditDialog from "./ModpackEditDialog";
-import { createDesktopStore, joinPath, listen, watch } from "../../../desktop";
+import { createDesktopStore, listen } from "../../../desktop";
+import { watchModpacks } from "../../../modpackWatch";
+import quadrantLocale from "../../../i18n";
+import { isModpackMissingError } from "../../../errors";
+import { useReportError } from "../../../useReportError";
 import {
   loaderProvidersFromSettings,
   ModLoaderProvider,
@@ -53,6 +57,7 @@ export default function ApplyPage() {
   } = useSyncedModpacks();
 
   const { t } = useTranslation();
+  const reportError = useReportError();
   const [isUpdateDialogOpen, setIsUpdateDialogOpen] = useState(false);
   const [isDialogToCreate, setIsDialogToCreate] = useState(false);
 
@@ -92,7 +97,11 @@ export default function ApplyPage() {
       const configStore = createDesktopStore("config.json");
       const [versions, availableModpacks, curseForgeEnabled, modrinthEnabled] =
         await Promise.all([
-          getVersions(),
+          // Live provider request: offline, it must not hide the local packs.
+          getVersions().catch((error) => {
+            console.error(error);
+            return [] as MinecraftVersion[];
+          }),
           getModpacks(),
           configStore.get<boolean>("curseforge"),
           configStore.get<boolean>("modrinth"),
@@ -119,47 +128,14 @@ export default function ApplyPage() {
         unknownMods: false,
       });
 
-      // The Minecraft folder itself (the `mods` link flips on apply) plus the
-      // modpacks tree, where installs and sync metadata land several levels
-      // deep and would be invisible to a non-recursive watch.
-      const minecraftFolder = await getMinecraftFolder(false);
-      let treeWatchAttached = false;
-      const watchTree = async () => {
-        if (treeWatchAttached || isUnmounted) return;
-        treeWatchAttached = true;
-        try {
-          const unwatch = await watch(
-            await joinPath(minecraftFolder, "modpacks"),
-            () => {
-              if (!isUnmounted) void updateModpacks().catch(console.error);
-            },
-            { delayMs: 50, recursive: true },
-          );
-          if (isUnmounted) unwatch();
-          else cleanupFns.push(unwatch);
-        } catch (error) {
-          // The tree may not exist until the first local pack is created.
-          treeWatchAttached = false;
-          console.error(error);
-        }
-      };
-      try {
-        const unwatch = await watch(
-          await joinPath(minecraftFolder),
-          async () => {
-            if (!isUnmounted) {
-              await watchTree();
-              await updateModpacks().catch(console.error);
-            }
-          },
-          { delayMs: 50 },
-        );
-        if (isUnmounted) unwatch();
-        else cleanupFns.push(unwatch);
-      } catch (error) {
-        console.error(error);
-      }
-      await watchTree();
+      const unwatch = await watchModpacks(
+        await getMinecraftFolder(false),
+        () => {
+          if (!isUnmounted) void updateModpacks().catch(console.error);
+        },
+      );
+      if (isUnmounted) unwatch();
+      else cleanupFns.push(unwatch);
 
       const unlisten = await listen(
         "quadrantShareSubmission",
@@ -172,7 +148,7 @@ export default function ApplyPage() {
             message: (
               <span className="flex">
                 <MdCheck className="w-5 h-5 mx-2" />
-                {t("copiedToClipboard", { amount: usesLeft })}
+                {quadrantLocale.t("copiedToClipboard", { amount: usesLeft })}
               </span>
             ),
             className: "bg-emerald-600 rounded-4xl",
@@ -214,10 +190,15 @@ export default function ApplyPage() {
     }
   };
 
+  // Watch events burst while installs write files, so an older listing can
+  // resolve after a newer one; only the latest request may land.
+  const modpacksRequestRef = useRef(0);
   const updateModpacks = async () => {
+    const request = ++modpacksRequestRef.current;
     const newModpacks = await getModpacks();
-
-    setModpacks(newModpacks);
+    if (request === modpacksRequestRef.current) {
+      setModpacks(newModpacks);
+    }
   };
 
   const shareCode = parseShareCode(searchQuery);
@@ -263,10 +244,7 @@ export default function ApplyPage() {
           <input
             placeholder={t("searchModpacksPlaceholder")}
             className="input min-w-0 flex-1 h-10 px-4 rounded-full bg-slate-700 text-sm font-bold text-slate-100 placeholder:font-normal placeholder:text-slate-400 outline-none focus:bg-slate-600"
-            onChange={(event) => {
-              const query = event.target.value.toLowerCase().trim();
-              setSearchQuery(query);
-            }}
+            onChange={(event) => setSearchQuery(event.target.value)}
             autoComplete="off"
             value={searchQuery}
           ></input>
@@ -290,13 +268,18 @@ export default function ApplyPage() {
                 return;
               }
               try {
-                await deleteModpack("free");
-              } catch {
-                // Ignore missing temporary modpack.
+                try {
+                  await deleteModpack("free");
+                } catch (error) {
+                  // A missing temporary modpack is the normal first run.
+                  if (!isModpackMissingError(error)) throw error;
+                }
+                await createModpack("free", firstVersion, ModLoader.Unknown);
+                await applyModpack("free");
+                await updateModpacks();
+              } catch (error) {
+                reportError(error);
               }
-              await createModpack("free", firstVersion, ModLoader.Unknown);
-              await applyModpack("free");
-              await updateModpacks();
             }}
             className={toolbarIconClass + " hover:bg-red-700"}
             title={t("clear")}
