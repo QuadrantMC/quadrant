@@ -130,6 +130,24 @@ afterEach(() => {
 });
 
 describe("SearchPage", () => {
+  it("searches once after the saved filters and categories have loaded", async () => {
+    storeGet.mockImplementation(async (key: string) => {
+      if (key === "curseforge") return false;
+      if (key === "modrinth") return true;
+      if (key === "searchFilters") return { sortBy: "downloads", version: "1.20.1" };
+      return undefined;
+    });
+    getCategories.mockResolvedValue([
+      { id: "x", name: "Tech", header: "categories", source: ModSource.Modrinth },
+    ]);
+    render(<SearchPage />);
+    await waitFor(() => expect(searchMods).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(searchMods).toHaveBeenCalledTimes(1);
+  });
+
   it("boots and runs an initial search against the enabled provider", async () => {
     render(<SearchPage />);
 

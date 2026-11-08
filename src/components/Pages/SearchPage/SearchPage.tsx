@@ -150,6 +150,8 @@ export default function SearchPage() {
   // Gate persistence until the saved filter blob has been loaded, so the
   // initial default state never overwrites what was previously stored.
   const hydratedRef = useRef(false);
+  // State twin of the ref: the first search waits for the saved filters.
+  const [hydrated, setHydrated] = useState(false);
   const configRef = useRef(createDesktopStore("config.json"));
   const configStore = configRef.current;
 
@@ -411,9 +413,13 @@ export default function SearchPage() {
         if (saved.filtersCollapsed !== undefined)
           setFiltersCollapsed(saved.filtersCollapsed);
       }
-      hydratedRef.current = true;
     };
-    boot().catch(console.error);
+    boot()
+      .catch(console.error)
+      .finally(() => {
+        hydratedRef.current = true;
+        setHydrated(true);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -491,10 +497,18 @@ export default function SearchPage() {
 
   // Re-run the search whenever any query input changes. Taxonomy changes matter
   // because they can add a newly enabled provider's id to a selected category.
+  // The search depends on the category ids it sends, not on the taxonomy list,
+  // so loading the taxonomy doesn't search again unless a selection resolves.
+  const categoryIdsKey = JSON.stringify([
+    catIdsFor(ModSource.CurseForge),
+    catIdsFor(ModSource.Modrinth),
+  ]);
   useEffect(() => {
+    if (!hydrated) return;
     void runSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    hydrated,
     contentType,
     curseforge,
     modrinth,
@@ -503,7 +517,7 @@ export default function SearchPage() {
     openSource,
     targetModpack,
     selected,
-    categories,
+    categoryIdsKey,
     sortBy,
   ]);
 
