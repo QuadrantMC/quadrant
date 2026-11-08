@@ -1184,8 +1184,9 @@ async fn download_missing_files(
         }
         mods[index].sha512 = Some(hash);
         downloaded += 1;
+        // install_modpack sends 1.0 once the files are moved into the pack.
         event_sink.publish(BackendEvent::ModpackDownloadProgress(
-            downloaded as f64 / total_mods as f64,
+            downloaded as f64 / (total_mods + 1) as f64,
         ))?;
     }
 
@@ -2393,7 +2394,8 @@ mod tests {
             })
             .collect();
         assert_eq!(progress.len(), total + 1);
-        assert!(progress.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(progress.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(progress.iter().filter(|value| **value >= 1.0).count(), 1);
         assert!(!has_staging_folder(&modpack_path(&mc_folder, "many")));
     }
 
