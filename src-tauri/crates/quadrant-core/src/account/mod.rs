@@ -8,6 +8,7 @@ use once_cell::sync::Lazy;
 use crate::{Result, ports::SecretStore};
 
 pub mod id;
+pub mod pkce;
 pub mod quadrant_settings_sync;
 pub mod quadrant_share;
 pub mod quadrant_sync;

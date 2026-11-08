@@ -330,6 +330,40 @@ pub async fn get_account_info_with_refresh(
     parse_account_info_response(response).await
 }
 
+/// Tells the server to end this install's session (RFC 7009). Revoking the
+/// refresh token also kills the access token issued with it, so the access
+/// token is only sent when there is no refresh token. Meant to run just
+/// before the local secrets are deleted, so a failure is returned for the
+/// caller to log and ignore.
+pub async fn revoke_session(
+    secret_store: &impl SecretStore,
+    user_agent: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<()> {
+    let (token, hint) = match secret_store.get_secret("refreshToken")? {
+        Some(token) => (token, "refresh_token"),
+        None => match secret_store.get_secret("accountToken")? {
+            Some(token) => (token, "access_token"),
+            None => return Ok(()),
+        },
+    };
+    let mut body = HashMap::new();
+    body.insert("token", token.as_str());
+    body.insert("token_type_hint", hint);
+    body.insert("client_id", client_id);
+    body.insert("client_secret", client_secret);
+
+    account_http_client()
+        .post(format!("{}/oauth2/revoke", backend_base_url()))
+        .form(&body)
+        .header("User-Agent", user_agent)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
 /// Completes the OAuth authorization code flow and persists returned tokens.
 pub async fn oauth2_login(
     secret_store: &impl SecretStore,
@@ -338,6 +372,7 @@ pub async fn oauth2_login(
     client_secret: &str,
     code: String,
     redirect_uri: String,
+    code_verifier: Option<String>,
 ) -> Result<()> {
     log::info!("Starting OAuth2 login flow");
     let mut body = HashMap::new();
@@ -346,6 +381,9 @@ pub async fn oauth2_login(
     body.insert("grant_type", "authorization_code");
     body.insert("code", code.as_str());
     body.insert("redirect_uri", redirect_uri.as_str());
+    if let Some(code_verifier) = code_verifier.as_deref() {
+        body.insert("code_verifier", code_verifier);
+    }
 
     let response = account_http_client()
         .post(format!("{}/oauth2/token", backend_base_url()))
@@ -566,7 +604,8 @@ mod tests {
     use super::{
         Notification, NotificationCursor, NotificationWsFrame,
         get_notification_history_all_since_with_refresh,
-        get_notification_history_page_with_refresh, oauth2_login, try_refresh_token,
+        get_notification_history_page_with_refresh, oauth2_login, revoke_session,
+        try_refresh_token,
     };
     use crate::{Result, ports::SecretStore};
     use httpmock::{
@@ -630,6 +669,7 @@ mod tests {
             "client-secret",
             "authorization-code".to_string(),
             "quadrant://login".to_string(),
+            None,
         )
         .await
         .unwrap();
@@ -641,6 +681,92 @@ mod tests {
         );
         assert_eq!(store.get_secret("refreshToken").unwrap(), None);
         assert!(!crate::account::account_token_needs_refresh(&store).unwrap());
+    }
+
+    #[tokio::test]
+    async fn login_sends_the_pkce_verifier_with_the_code() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let request = server.mock(|when, then| {
+            when.method(POST)
+                .path("/oauth2/token")
+                .body_includes("code_verifier=the-verifier")
+                .body_includes("code=authorization-code");
+            then.status(200).json_body(serde_json::json!({
+                "access_token": "new-account-access",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "scope": "profile:read sync:read notifications:read"
+            }));
+        });
+        let store = StatefulSecretStore::default();
+
+        oauth2_login(
+            &store,
+            "test-agent",
+            "client-id",
+            "client-secret",
+            "authorization-code".to_string(),
+            "http://127.0.0.1:4000".to_string(),
+            Some("the-verifier".to_string()),
+        )
+        .await
+        .unwrap();
+
+        request.assert();
+    }
+
+    #[tokio::test]
+    async fn revoking_ends_the_session_by_its_refresh_token() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let request = server.mock(|when, then| {
+            when.method(POST)
+                .path("/oauth2/revoke")
+                .body_includes("token=the-refresh")
+                .body_includes("token_type_hint=refresh_token")
+                .body_includes("client_id=client-id");
+            then.status(200);
+        });
+        let store = StatefulSecretStore::default();
+        store.set_secret("accountToken", "the-access").unwrap();
+        store.set_secret("refreshToken", "the-refresh").unwrap();
+
+        revoke_session(&store, "test-agent", "client-id", "client-secret")
+            .await
+            .unwrap();
+
+        request.assert();
+    }
+
+    #[tokio::test]
+    async fn revoking_without_a_session_makes_no_request() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let request = server.mock(|when, then| {
+            when.method(POST).path("/oauth2/revoke");
+            then.status(200);
+        });
+
+        revoke_session(
+            &StatefulSecretStore::default(),
+            "test-agent",
+            "client-id",
+            "client-secret",
+        )
+        .await
+        .unwrap();
+
+        request.assert_calls(0);
     }
 
     #[tokio::test]

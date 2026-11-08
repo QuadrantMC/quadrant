@@ -561,7 +561,6 @@ pub async fn run(launch: Launch) {
             #[cfg(feature = "telemetry")]
             other::telemetry::remove_telemetry,
             #[cfg(feature = "quadrant_id")]
-            account::set_secret,
             #[cfg(feature = "quadrant_id")]
             account::clear_account_token,
             #[cfg(feature = "quadrant_id")]

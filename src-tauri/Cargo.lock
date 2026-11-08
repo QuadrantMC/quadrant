@@ -4486,9 +4486,11 @@ name = "quadrant-core"
 version = "26.11.1-stable"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "dirs 7.0.0",
  "futures",
+ "getrandom 0.4.3",
  "hex",
  "http-cache-reqwest",
  "httpmock",

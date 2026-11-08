@@ -31,7 +31,6 @@ This document freezes the backend-facing surface while the Rust backend is extra
 - `get_mod_curseforge`
 - `get_mod_owners_curseforge`
 - `get_mod_deps_curseforge`
-- `set_secret`
 - `clear_account_token`
 - `get_account_info`
 - `oauth2_login`

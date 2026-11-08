@@ -17,10 +17,11 @@ pub async fn get_account_info(app: AppHandle) -> Result<AccountInfo, tauri::Erro
 pub async fn oauth2_login(
     code: String,
     redirect_uri: String,
+    code_verifier: Option<String>,
     app: AppHandle,
 ) -> Result<(), tauri::Error> {
     app.state::<QuadrantHost>()
-        .oauth2_login(code, redirect_uri)
+        .oauth2_login(code, redirect_uri, code_verifier)
         .await
         .map_err(crate::command_error)
 }

@@ -21,7 +21,7 @@ use quadrant_core::{
         id::{
             AccountInfo, Notification, NotificationCursor, NotificationWsFrame,
             get_account_info_with_refresh, get_notification_history_all_since_with_refresh,
-            oauth2_login, read_notification, try_refresh_token,
+            oauth2_login, read_notification, revoke_session, try_refresh_token,
         },
         quadrant_settings_sync::{self, SettingsPull},
         quadrant_share::{
@@ -31,7 +31,6 @@ use quadrant_core::{
             SyncedModpack, answer_invite, delete_synced_modpack, get_synced_modpacks,
             invite_member, kick_member,
         },
-        set_secret,
     },
     config::{ensure_default_app_config, get_mc_folder},
     content::{
@@ -92,6 +91,8 @@ const SETTINGS_SYNC_INTERVAL_SECS: u64 = 120;
 const TOKEN_REFRESH_CHECK_INTERVAL_SECS: u64 = 60;
 const WS_REPLAY_LIMIT: usize = 500;
 const NOTIFICATION_HISTORY_LIMIT: usize = WS_REPLAY_LIMIT;
+/// How long signing out waits for the server before it deletes the tokens anyway.
+const REVOKE_TIMEOUT: Duration = Duration::from_secs(5);
 const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// The API pings every 30 seconds, so this much silence means the connection
 /// is gone even though no error reached the socket.
@@ -1201,15 +1202,25 @@ impl QuadrantHost {
         get_mod_deps_curseforge(id).await
     }
 
-    pub fn set_secret(&self, key: String, value: String) -> Result<()> {
-        set_secret(&self.inner.secret_store, &key, &value)
-    }
-
-    pub fn clear_account_token(&self) -> Result<()> {
-        clear_account_token(&self.inner.secret_store)
-    }
-
-    pub fn logout(&self) -> Result<()> {
+    /// Signs out: asks the server to end the session, then deletes the local
+    /// tokens. A server that can't be reached or refuses doesn't keep the user
+    /// signed in here.
+    pub async fn clear_account_token(&self) -> Result<()> {
+        let revoked = tokio::time::timeout(
+            REVOKE_TIMEOUT,
+            revoke_session(
+                &self.inner.secret_store,
+                &self.inner.options.user_agent,
+                &self.inner.options.oauth_client_id,
+                &self.inner.options.oauth_client_secret,
+            ),
+        )
+        .await;
+        match revoked {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => log::warn!("Couldn't revoke the session on sign-out: {error}"),
+            Err(_) => log::warn!("Revoking the session on sign-out timed out"),
+        }
         clear_account_token(&self.inner.secret_store)
     }
 
@@ -1227,7 +1238,12 @@ impl QuadrantHost {
         .await
     }
 
-    pub async fn oauth2_login(&self, code: String, redirect_uri: String) -> Result<()> {
+    pub async fn oauth2_login(
+        &self,
+        code: String,
+        redirect_uri: String,
+        code_verifier: Option<String>,
+    ) -> Result<()> {
         oauth2_login(
             &self.inner.secret_store,
             &self.inner.options.user_agent,
@@ -1235,6 +1251,7 @@ impl QuadrantHost {
             &self.inner.options.oauth_client_secret,
             code,
             redirect_uri,
+            code_verifier,
         )
         .await?;
         self.inner
@@ -1512,7 +1529,6 @@ impl QuadrantHost {
             "get_mod_modrinth",
             "get_mod_owners_modrinth",
             "get_mod_deps_modrinth",
-            "set_secret",
             "clear_account_token",
             "get_account_info",
             "oauth2_login",
@@ -1739,19 +1755,15 @@ impl QuadrantHost {
                 let args: IdArgs = from_value(payload)?;
                 to_value(self.get_mod_deps_curseforge(args.id).await?)
             }
-            "set_secret" => {
-                let args: SetSecretArgs = from_value(payload)?;
-                self.set_secret(args.key, args.value)?;
-                Ok(Value::Null)
-            }
             "clear_account_token" => {
-                self.clear_account_token()?;
+                self.clear_account_token().await?;
                 Ok(Value::Null)
             }
             "get_account_info" => to_value(self.get_account_info().await?),
             "oauth2_login" => {
                 let args: OAuthLoginArgs = from_value(payload)?;
-                self.oauth2_login(args.code, args.redirect_uri).await?;
+                self.oauth2_login(args.code, args.redirect_uri, args.code_verifier)
+                    .await?;
                 Ok(Value::Null)
             }
             "oauth2_client_id" => to_value(self.oauth2_client_id()),
@@ -2832,16 +2844,12 @@ struct IdArgs {
 }
 
 #[derive(Deserialize)]
-struct SetSecretArgs {
-    key: String,
-    value: String,
-}
-
-#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OAuthLoginArgs {
     code: String,
     redirect_uri: String,
+    #[serde(default)]
+    code_verifier: Option<String>,
 }
 
 #[derive(Deserialize)]

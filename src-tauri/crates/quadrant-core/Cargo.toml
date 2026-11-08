@@ -9,9 +9,11 @@ curseforge = []
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
+getrandom = { workspace = true }
 hex = { workspace = true }
 http-cache-reqwest = { workspace = true }
 log = { workspace = true }
