@@ -118,6 +118,6 @@ mod tests {
         assert!(roots.contains(&dir.canonicalize().unwrap()));
 
         let missing = dir.join(format!("quadrant-no-such-folder-{}", std::process::id()));
-        assert_eq!(watch_roots(&missing), [missing.clone()]);
+        assert_eq!(watch_roots(&missing), std::slice::from_ref(&missing));
     }
 }

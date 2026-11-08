@@ -919,10 +919,8 @@ mod tests {
         assert!(failed.is_err());
         assert_eq!(resets.get(), 1);
 
-        let finished = tauri::async_runtime::block_on(reset_progress_on_failure(
-            async { Ok(()) },
-            reset,
-        ));
+        let finished =
+            tauri::async_runtime::block_on(reset_progress_on_failure(async { Ok(()) }, reset));
         assert!(finished.is_ok());
         assert_eq!(resets.get(), 1);
     }
