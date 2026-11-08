@@ -193,104 +193,118 @@ pub(crate) fn safe_download_file_name(download_url: &str, source: &ModSource) ->
     Ok(decoded)
 }
 
-/// Discovers local modpacks under `<mcFolder>/modpacks`.
+//// Discovers local modpacks under `<mcFolder>/modpacks`.
 pub async fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<LocalModpack>> {
     let mut modpacks = Vec::new();
     let modpacks_folder = mc_folder.join("modpacks");
     if !modpacks_folder.exists() {
         return Ok(modpacks);
     }
-    let mods_folder = mc_folder.join("mods");
 
     for entry in std::fs::read_dir(modpacks_folder)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Skip non-directory entries before trying to read them as folders.
-        // macOS drops `.DS_Store` files into directories, and calling
-        // `read_dir` on a file errors out — which previously failed the whole
-        // modpack listing on macOS.
-        if !path.is_dir() {
+        let path = entry?.path();
+        if hide_free && path.file_name().is_some_and(|name| name == "free") {
             continue;
         }
-
-        // One unreadable pack must not blank the whole listing: every
-        // pre-listing operation (delete, rename, install, share) depends on it.
-        let file_amount = match std::fs::read_dir(&path) {
-            Ok(entries) => entries.count(),
-            Err(error) => {
-                log::warn!(
-                    "Skipping unreadable modpack folder {}: {error}",
-                    path.display()
-                );
-                continue;
-            }
-        };
-
-        let mut extra_files = 0;
-        let modpack_config_v2 = path.join("modConfigV2.json");
-        let modpack_config_v1 = path.join("modConfig.json");
-        let modpack_sync = path.join("quadrantSync.json");
-        let mut last_synced = 0_i64;
-        let mut modpack_id = None;
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-
-        if hide_free && name == "free" {
-            continue;
+        if let Some(modpack) = load_modpack(mc_folder, &path).await? {
+            modpacks.push(modpack);
         }
+    }
 
-        let is_applied = mods_link_target(&mods_folder).is_some_and(|mods_path| mods_path == path);
+    Ok(modpacks)
+}
 
-        let has_v2 = modpack_config_v2.exists();
-        let has_v1 = modpack_config_v1.exists();
+/// The one pack `name` as [`get_modpacks`] lists it, without reading every
+/// other pack. Commands that act on a single pack use this.
+pub async fn get_modpack(mc_folder: &Path, name: &str) -> Result<Option<LocalModpack>> {
+    validate_modpack_name(name)?;
+    load_modpack(mc_folder, &modpack_path(mc_folder, name)).await
+}
 
-        if !has_v2 && !has_v1 {
-            modpacks.push(LocalModpack {
-                name,
-                version: "-".to_string(),
-                mods: Vec::new(),
-                mod_loader: ModLoader::Unknown,
-                is_applied,
-                last_synced,
-                modpack_id: None,
-                unknown_mods: true,
-                manifest_error: None,
-            });
-            continue;
+async fn load_modpack(mc_folder: &Path, path: &Path) -> Result<Option<LocalModpack>> {
+    // Skip non-directory entries before trying to read them as folders.
+    // macOS drops `.DS_Store` files into directories, and calling
+    // `read_dir` on a file errors out — which previously failed the whole
+    // modpack listing on macOS.
+    if !path.is_dir() {
+        return Ok(None);
+    }
+
+    // One unreadable pack must not blank the whole listing: every
+    // pre-listing operation (delete, rename, install, share) depends on it.
+    let file_amount = match std::fs::read_dir(path) {
+        Ok(entries) => entries.count(),
+        Err(error) => {
+            log::warn!(
+                "Skipping unreadable modpack folder {}: {error}",
+                path.display()
+            );
+            return Ok(None);
         }
+    };
 
-        if modpack_sync.exists() {
-            extra_files += 1;
-            // Sync metadata is advisory. A damaged file degrades to "never
-            // synced" instead of failing the listing.
-            match std::fs::read_to_string(&modpack_sync)
-                .map_err(anyhow::Error::from)
-                .and_then(|raw| serde_json::from_str::<SyncInfo>(&raw).map_err(Into::into))
-            {
-                Ok(sync_info) => {
-                    last_synced = sync_info.last_synced.saturating_mul(1000);
-                    modpack_id = sync_info.modpack_id;
-                }
-                Err(error) => {
-                    log::warn!("Ignoring damaged sync metadata for modpack \"{name}\": {error}");
-                }
-            }
-        }
+    let mut extra_files = 0;
+    let modpack_config_v2 = path.join("modConfigV2.json");
+    let modpack_config_v1 = path.join("modConfig.json");
+    let modpack_sync = path.join("quadrantSync.json");
+    let mut last_synced = 0_i64;
+    let mut modpack_id = None;
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
 
-        let config_path = if has_v2 {
-            &modpack_config_v2
-        } else {
-            &modpack_config_v1
-        };
-        let parsed = std::fs::File::open(config_path)
+    let is_applied =
+        mods_link_target(&mc_folder.join("mods")).is_some_and(|mods_path| mods_path == path);
+
+    let has_v2 = modpack_config_v2.exists();
+    let has_v1 = modpack_config_v1.exists();
+
+    if !has_v2 && !has_v1 {
+        return Ok(Some(LocalModpack {
+            name,
+            version: "-".to_string(),
+            mods: Vec::new(),
+            mod_loader: ModLoader::Unknown,
+            is_applied,
+            last_synced,
+            modpack_id: None,
+            unknown_mods: true,
+            manifest_error: None,
+        }));
+    }
+
+    if modpack_sync.exists() {
+        extra_files += 1;
+        // Sync metadata is advisory. A damaged file degrades to "never
+        // synced" instead of failing the listing.
+        match std::fs::read_to_string(&modpack_sync)
             .map_err(anyhow::Error::from)
-            .and_then(|config_file| {
-                serde_json::from_reader::<_, InstalledModpack>(std::io::BufReader::new(config_file))
-                    .map_err(Into::into)
-            });
-        if let Err(error) = &parsed {
+            .and_then(|raw| serde_json::from_str::<SyncInfo>(&raw).map_err(Into::into))
+        {
+            Ok(sync_info) => {
+                last_synced = sync_info.last_synced.saturating_mul(1000);
+                modpack_id = sync_info.modpack_id;
+            }
+            Err(error) => {
+                log::warn!("Ignoring damaged sync metadata for modpack \"{name}\": {error}");
+            }
+        }
+    }
+
+    let config_path = if has_v2 {
+        &modpack_config_v2
+    } else {
+        &modpack_config_v1
+    };
+    let parsed = std::fs::File::open(config_path)
+        .map_err(anyhow::Error::from)
+        .and_then(|config_file| {
+            serde_json::from_reader::<_, InstalledModpack>(std::io::BufReader::new(config_file))
+                .map_err(Into::into)
+        });
+    let mut modpack = match parsed {
+        Ok(modpack) => modpack,
+        Err(error) => {
             log::warn!("Modpack \"{name}\" has an unreadable manifest: {error}");
-            modpacks.push(LocalModpack {
+            return Ok(Some(LocalModpack {
                 name,
                 version: "-".to_string(),
                 mods: Vec::new(),
@@ -300,61 +314,115 @@ pub async fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<Local
                 modpack_id,
                 unknown_mods: true,
                 manifest_error: Some(error.to_string()),
-            });
-            continue;
+            }));
         }
+    };
+    modpack.name = name.clone();
 
-        let mut modpack = parsed?;
-        modpack.name = name.clone();
-
-        let mut needs_rewrite = false;
-
-        if !has_v2 {
-            modpack.mod_config_version = "2".to_string();
-            modpack.quadrant_version = crate::models::quadrant_version();
-            needs_rewrite = true;
-        }
-
-        for mod_ in &mut modpack.mods {
-            if mod_.name.is_empty() && mod_.source != ModSource::Online {
-                match enrich_installed_mod(mod_.clone()).await {
-                    Ok(enriched) => {
-                        *mod_ = enriched;
-                        needs_rewrite = true;
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to enrich mod {} in modpack \"{}\": {}",
-                            mod_.id,
-                            name,
-                            e
-                        );
-                    }
-                }
-            }
-        }
-
-        if needs_rewrite && let Err(e) = record_listing_changes(mc_folder, &path, &modpack) {
-            log::error!("Failed to write modConfigV2.json for modpack \"{name}\": {e}");
-        }
-
-        let v2_file_count = if modpack_config_v2.exists() { 1 } else { 0 };
-        let v1_file_count = if modpack_config_v1.exists() { 1 } else { 0 };
-        extra_files += v2_file_count + v1_file_count;
-
-        let mut modpack = LocalModpack::from((modpack, is_applied, last_synced));
-        modpack.modpack_id = modpack_id;
-        let expected_files = modpack.mods.len() + extra_files;
-        if expected_files < file_amount {
-            modpack.unknown_mods = true;
-        }
-        modpacks.push(modpack);
+    let mut needs_rewrite = enrich_unnamed_mods(&mut modpack).await;
+    if !has_v2 {
+        modpack.mod_config_version = "2".to_string();
+        modpack.quadrant_version = crate::models::quadrant_version();
+        needs_rewrite = true;
     }
 
-    Ok(modpacks)
+    if needs_rewrite && let Err(e) = record_listing_changes(mc_folder, path, &modpack) {
+        log::error!("Failed to write modConfigV2.json for modpack \"{name}\": {e}");
+    }
+
+    let v2_file_count = if modpack_config_v2.exists() { 1 } else { 0 };
+    let v1_file_count = if modpack_config_v1.exists() { 1 } else { 0 };
+    extra_files += v2_file_count + v1_file_count;
+
+    let mut modpack = LocalModpack::from((modpack, is_applied, last_synced));
+    modpack.modpack_id = modpack_id;
+    let expected_files = modpack.mods.len() + extra_files;
+    if expected_files < file_amount {
+        modpack.unknown_mods = true;
+    }
+    Ok(Some(modpack))
 }
 
-/// Writes what listing learned, names fetched for bare entries and the move
+/// How long an entry whose details could not be fetched is left alone, so an
+/// offline listing does not wait on the same failing requests every time.
+const ENRICH_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const ENRICH_CONCURRENCY: usize = 8;
+
+type EnrichKey = (String, String);
+
+static ENRICH_FAILURES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<EnrichKey, std::time::Instant>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn enrich_key(mod_: &InstalledMod) -> EnrichKey {
+    (format!("{:?}", mod_.source), mod_.id.clone())
+}
+
+/// Fetches the details of the provider entries that have no name, a few at a
+/// time. Returns whether any entry learned its name.
+async fn enrich_unnamed_mods(modpack: &mut InstalledModpack) -> bool {
+    let now = std::time::Instant::now();
+    let pending: Vec<usize> = {
+        let failures = ENRICH_FAILURES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        modpack
+            .mods
+            .iter()
+            .enumerate()
+            .filter(|(_, mod_)| mod_.name.is_empty() && mod_.source != ModSource::Online)
+            .filter(|(_, mod_)| {
+                failures
+                    .get(&enrich_key(mod_))
+                    .is_none_or(|failed_at| now.duration_since(*failed_at) >= ENRICH_RETRY_AFTER)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    };
+    if pending.is_empty() {
+        return false;
+    }
+
+    let results: Vec<(usize, Result<InstalledMod>)> =
+        futures::stream::iter(pending.into_iter().map(|index| {
+            let mod_ = modpack.mods[index].clone();
+            async move { (index, enrich_installed_mod(mod_).await) }
+        }))
+        .buffer_unordered(ENRICH_CONCURRENCY)
+        .collect()
+        .await;
+
+    let mut changed = false;
+    let mut failures = ENRICH_FAILURES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (index, result) in results {
+        let key = enrich_key(&modpack.mods[index]);
+        match result {
+            Ok(enriched) if !enriched.name.is_empty() => {
+                failures.remove(&key);
+                modpack.mods[index] = enriched;
+                changed = true;
+            }
+            // Nothing to learn without the provider (CurseForge compiled out).
+            Ok(_) => {
+                failures.insert(key, now);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to enrich mod {} in modpack \"{}\": {}",
+                    modpack.mods[index].id,
+                    modpack.name,
+                    e
+                );
+                failures.insert(key, now);
+            }
+        }
+    }
+    changed
+}
+
+// Writes what listing learned, names fetched for bare entries and the move
 /// from `modConfig.json` to `modConfigV2.json`, onto the manifest as it is now:
 /// the fetches took a while, and another write may have landed meanwhile.
 fn record_listing_changes(
@@ -1354,6 +1422,51 @@ mod tests {
         let listed = get_modpacks(&mc_folder, false).await.unwrap();
         assert_eq!(listed[0].last_synced, 99_000);
         assert_eq!(listed[0].modpack_id, None);
+    }
+
+    #[tokio::test]
+    async fn get_modpack_reads_only_the_named_pack() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        create_modpack(&mc_folder, &[], "one", "1.20.1", ModLoader::Fabric).unwrap();
+        create_modpack(&mc_folder, &[], "two", "1.21", ModLoader::Quilt).unwrap();
+        std::fs::write(
+            modpack_path(&mc_folder, "two").join("modConfigV2.json"),
+            "{",
+        )
+        .unwrap();
+
+        let one = get_modpack(&mc_folder, "one").await.unwrap().unwrap();
+        assert_eq!(one.name, "one");
+        assert_eq!(one.version, "1.20.1");
+        assert!(one.manifest_error.is_none());
+        assert!(get_modpack(&mc_folder, "missing").await.unwrap().is_none());
+        assert!(get_modpack(&mc_folder, "../one").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn listing_leaves_a_manifest_alone_when_no_entry_learned_a_name() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        create_modpack(&mc_folder, &[], "bare", "1.20.1", ModLoader::Fabric).unwrap();
+        let bare = InstalledMod::minimal(
+            "listing-cache-test-id".to_string(),
+            ModSource::Modrinth,
+            "https://cdn.modrinth.com/data/x/versions/y/bare.jar".to_string(),
+        );
+        let manifest_path = modpack_path(&mc_folder, "bare").join("modConfigV2.json");
+        let mut manifest: InstalledModpack =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.mods.push(bare.clone());
+        std::fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+        let before = std::fs::read(&manifest_path).unwrap();
+        ENRICH_FAILURES
+            .lock()
+            .unwrap()
+            .insert(enrich_key(&bare), std::time::Instant::now());
+
+        let listed = get_modpack(&mc_folder, "bare").await.unwrap().unwrap();
+        assert_eq!(listed.mods.len(), 1);
+        assert!(listed.mods[0].name.is_empty());
+        assert_eq!(std::fs::read(&manifest_path).unwrap(), before);
     }
 
     #[test]

@@ -49,8 +49,8 @@ use quadrant_core::{
     models::{Article, InstalledMod, InstalledModpack, LocalModpack, ModLoader, ModSource},
     modpacks::{
         apply_modpack, backfill_mod_hashes, check_manifest_readable, create_modpack, delete_mod,
-        delete_modpack, export_modpack_to, get_modpacks, install_modpack, register_mod,
-        review_incoming_mods, set_modpack_sync_date, update_modpack,
+        delete_modpack, export_modpack_to, get_modpack, get_modpacks, install_modpack,
+        register_mod, review_incoming_mods, set_modpack_sync_date, update_modpack,
     },
     ports::{EventSink, SecretStore, SettingsStore},
     prism::{self, PrismInstance, PrismSyncPlan},
@@ -609,6 +609,15 @@ impl QuadrantHost {
         get_modpacks(&self.get_minecraft_folder()?, hide_free).await
     }
 
+    /// The listing of just the pack `name` (empty when it does not exist), for
+    /// the core functions that look one pack up in a listing.
+    async fn modpack_listing(&self, name: &str) -> Result<Vec<LocalModpack>> {
+        Ok(get_modpack(&self.get_minecraft_folder()?, name)
+            .await?
+            .into_iter()
+            .collect())
+    }
+
     /// Records the file hashes older manifests lack. Hosts run it in the
     /// background at every launch; see [`backfill_mod_hashes`].
     pub async fn backfill_mod_hashes(&self) -> Result<usize> {
@@ -684,10 +693,8 @@ impl QuadrantHost {
     /// The named modpack from the on-disk listing, which is where the version
     /// and loader an instance is synced to come from.
     async fn require_modpack(&self, name: &str) -> Result<LocalModpack> {
-        self.get_modpacks(false)
+        get_modpack(&self.get_minecraft_folder()?, name)
             .await?
-            .into_iter()
-            .find(|modpack| modpack.name == name)
             .ok_or_else(|| anyhow::Error::from(ErrorCode::ModpackMissing))
     }
 
@@ -920,7 +927,7 @@ impl QuadrantHost {
     pub async fn delete_mod(&self, modpack_name: String, mod_id: String) -> Result<()> {
         let modpack = delete_mod(
             &self.get_minecraft_folder()?,
-            &self.get_modpacks(false).await?,
+            &self.modpack_listing(&modpack_name).await?,
             &modpack_name,
             &mod_id,
         )?;
@@ -945,7 +952,7 @@ impl QuadrantHost {
         };
         let modpack = update_modpack(
             &mc_folder,
-            &self.get_modpacks(false).await?,
+            &self.modpack_listing(&modpack_source).await?,
             &modpack_source,
             name,
             version,
@@ -963,7 +970,7 @@ impl QuadrantHost {
     ) -> Result<()> {
         create_modpack(
             &self.get_minecraft_folder()?,
-            &self.get_modpacks(false).await?,
+            &self.modpack_listing(&name).await?,
             &name,
             &version,
             mod_loader,
@@ -972,7 +979,7 @@ impl QuadrantHost {
 
     pub async fn delete_modpack(&self, name: String) -> Result<()> {
         let mc_folder = self.get_minecraft_folder()?;
-        let modpacks = self.get_modpacks(false).await?;
+        let modpacks = self.modpack_listing(&name).await?;
         // Unlinked first: once the folder is gone an instance links to nothing,
         // has no mods, and reports no modpack to unlink it from.
         self.detach_prism_instances_linked_to(&mc_folder, &name);
@@ -982,7 +989,7 @@ impl QuadrantHost {
     pub async fn register_mod(&self, mod_: InstalledMod, modpack: String) -> Result<()> {
         register_mod(
             &self.get_minecraft_folder()?,
-            &self.get_modpacks(false).await?,
+            &self.modpack_listing(&modpack).await?,
             mod_,
             &modpack,
         )
@@ -1045,12 +1052,7 @@ impl QuadrantHost {
         mod_loader: ModLoader,
         modpack_name: String,
     ) -> Result<Option<Mod>> {
-        let modpack = self
-            .get_modpacks(false)
-            .await?
-            .into_iter()
-            .find(|modpack| modpack.name == modpack_name)
-            .ok_or_else(|| anyhow::Error::from(quadrant_core::error::ErrorCode::ModpackMissing))?;
+        let modpack = self.require_modpack(&modpack_name).await?;
         let show_unupgradeable_mods = self
             .inner
             .config_store
@@ -1342,12 +1344,7 @@ impl QuadrantHost {
         &self,
         modpack_name: String,
     ) -> Result<QuadrantShareSubmissionResponse> {
-        let modpack = self
-            .get_modpacks(false)
-            .await?
-            .into_iter()
-            .find(|modpack| modpack.name == modpack_name)
-            .ok_or_else(|| anyhow::Error::from(quadrant_core::error::ErrorCode::ModpackMissing))?;
+        let modpack = self.require_modpack(&modpack_name).await?;
         modpack.ensure_manifest_readable()?;
         self.share_modpack_raw(modpack.into()).await
     }
