@@ -592,7 +592,7 @@ pub fn create_modpack(
         return Err(anyhow::Error::from(crate::error::ErrorCode::ModpackExists));
     }
     let modpack_folder = modpack_path(mc_folder, name);
-    std::fs::create_dir_all(mc_folder.join("modpacks"))?;
+    let _lock = lock_manifests(mc_folder)?;
     // The caller's listing can be stale. Create exclusively so a concurrent
     // creation cannot replace an existing pack's manifest.
     std::fs::create_dir(&modpack_folder).map_err(|error| {
@@ -921,6 +921,7 @@ pub fn set_modpack_sync_date(
     modpack_id: Option<&str>,
 ) -> Result<()> {
     validate_modpack_name(modpack)?;
+    let _lock = lock_manifests(mc_folder)?;
     write_file_atomically(
         modpack_path(mc_folder, modpack).join("quadrantSync.json"),
         serde_json::to_string_pretty(&SyncInfo {
@@ -1420,6 +1421,70 @@ mod tests {
 
         delete_modpack(&mc_folder, &listed, "beta").unwrap();
         assert!(get_modpacks(&mc_folder, false).await.unwrap().is_empty());
+    }
+
+    /// Holds the manifest lock file the way another app sharing the game
+    /// folder does, and checks that `write` waits for it.
+    fn assert_waits_for_other_apps(
+        mc_folder: &Path,
+        write: impl FnOnce() -> Result<()> + Send + 'static,
+    ) {
+        let held = lock_file(&mc_folder.join("modpacks").join(".modpacks.lock")).unwrap();
+        let (done, finished) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let result = write();
+            done.send(()).unwrap();
+            result
+        });
+        assert!(
+            finished
+                .recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "wrote while another app held the manifest lock"
+        );
+        drop(held);
+        writer.join().unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn manifest_writers_wait_for_other_apps() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        let runtime = tokio::runtime::Handle::current();
+
+        let folder = mc_folder.clone();
+        assert_waits_for_other_apps(&mc_folder, move || {
+            create_modpack(&folder, &[], "alpha", "1.20.1", ModLoader::Fabric)
+        });
+        let folder = mc_folder.clone();
+        assert_waits_for_other_apps(&mc_folder, move || {
+            set_modpack_sync_date(&folder, 42, "alpha", Some("modpack-123"))
+        });
+
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        let (folder, packs) = (mc_folder.clone(), listed.clone());
+        assert_waits_for_other_apps(&mc_folder, move || {
+            runtime.block_on(register_mod(
+                &folder,
+                &packs,
+                online_mod("mod-1", "https://example.invalid/mod.jar".to_string()),
+                "alpha",
+            ))
+        });
+
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        let (folder, packs) = (mc_folder.clone(), listed.clone());
+        assert_waits_for_other_apps(&mc_folder, move || {
+            delete_mod(&folder, &packs, "alpha", "mod-1").map(drop)
+        });
+        let (folder, packs) = (mc_folder.clone(), listed);
+        assert_waits_for_other_apps(&mc_folder, move || {
+            update_modpack(&folder, &packs, "alpha", None, Some("1.21".into()), None).map(drop)
+        });
+
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        assert_eq!(listed[0].version, "1.21");
+        assert!(listed[0].mods.is_empty());
+        assert_eq!(listed[0].modpack_id.as_deref(), Some("modpack-123"));
     }
 
     #[tokio::test]
