@@ -371,7 +371,9 @@ function App() {
               const resolved = await getQuadrantShareModpack(action.code);
               const randomString = Math.random().toString(36).substring(2, 10);
               contextFunctions.changeContent({
-                content: <SharedModpackView modpack={resolved} />,
+                content: (
+                  <SharedModpackView key={randomString} modpack={resolved} />
+                ),
                 name: randomString,
                 icon: <></>,
                 title: resolved.name,
@@ -403,7 +405,11 @@ function App() {
             }
             const randomString = Math.random().toString(36).substring(2, 10);
             contextFunctions.changeContent({
-              content: <ModInstallPage mod={mod} fileId={action.fileId} />,
+              // Keyed so a link arriving while an install page is open
+              // remounts it instead of keeping the previous mod's state.
+              content: (
+                <ModInstallPage key={mod.id} mod={mod} fileId={action.fileId} />
+              ),
               name: randomString,
               icon: <></>,
               title: mod.name,
@@ -526,7 +532,6 @@ function App() {
     changeContent: (component) => {
       const scrollPositionX = contentRef.current?.scrollLeft ?? 0;
       const scrollPositionY = contentRef.current?.scrollTop ?? 0;
-      console.log(component);
       contentHistoryRef.current = pushContent(
         contentHistoryRef.current,
         currentContentRef.current,
