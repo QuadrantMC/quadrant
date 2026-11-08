@@ -58,6 +58,24 @@ impl EventSink for TauriEventSink {
             BackendEvent::ConfigChanged(key) => {
                 self.app.emit("configChanged", key)?;
             }
+            BackendEvent::ModpackSyncWarning {
+                modpack_id,
+                name,
+                applied,
+                online_mods,
+                unverified_mods,
+            } => {
+                self.app.emit(
+                    "modpackSyncWarning",
+                    serde_json::json!({
+                        "modpackId": modpack_id,
+                        "name": name,
+                        "applied": applied,
+                        "onlineMods": online_mods,
+                        "unverifiedMods": unverified_mods,
+                    }),
+                )?;
+            }
         }
         Ok(())
     }

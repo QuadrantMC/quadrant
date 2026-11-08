@@ -759,6 +759,44 @@ pub fn set_modpack_sync_date(
     Ok(())
 }
 
+/// The entries of an incoming mod list that deserve a warning before it is
+/// installed over `current`, the list it replaces.
+#[derive(Debug, Clone, Default)]
+pub struct IncomingModsReview {
+    /// New or changed entries that download from a link someone added, which
+    /// can be any HTTPS host.
+    pub online: Vec<InstalledMod>,
+    /// New or changed entries with no `sha512`, so their files can not be
+    /// verified. Packs shared from older versions have none at all.
+    pub unverified: Vec<InstalledMod>,
+}
+
+/// Sorts out the incoming entries that are new or changed against `current`
+/// (same id, source and download). Pass an empty `current` to review a whole
+/// shared pack.
+pub fn review_incoming_mods(
+    current: &[InstalledMod],
+    incoming: &[InstalledMod],
+) -> IncomingModsReview {
+    let mut review = IncomingModsReview::default();
+    let changed = incoming.iter().filter(|mod_| {
+        !current.iter().any(|existing| {
+            existing.id == mod_.id
+                && existing.source == mod_.source
+                && existing.download_url == mod_.download_url
+        })
+    });
+    for mod_ in changed {
+        if mod_.source == ModSource::Online {
+            review.online.push(mod_.clone());
+        }
+        if mod_.sha512.is_none() {
+            review.unverified.push(mod_.clone());
+        }
+    }
+    review
+}
+
 /// Downloads the files declared by a modpack manifest into its local folder.
 ///
 /// Progress is emitted through [`BackendEvent::ModpackDownloadProgress`].
@@ -1716,6 +1754,49 @@ mod tests {
     async fn backfill_without_a_modpacks_folder_does_nothing() {
         let dir = tempdir().unwrap();
         assert_eq!(backfill_mod_hashes(dir.path()).await.unwrap(), 0);
+    }
+
+    #[test]
+    fn review_flags_only_new_or_changed_online_and_unhashed_entries() {
+        let provider = |id: &str, url: &str| InstalledMod {
+            sha512: Some("hash".to_string()),
+            ..InstalledMod::minimal(id.to_string(), ModSource::Modrinth, url.to_string())
+        };
+        let unhashed = |id: &str, url: &str| InstalledMod {
+            sha512: None,
+            ..provider(id, url)
+        };
+        let online = |id: &str, url: &str| InstalledMod {
+            sha512: Some("hash".to_string()),
+            ..online_mod(id, url.to_string())
+        };
+        let current = vec![
+            unhashed("kept", "https://cdn.modrinth.com/kept.jar"),
+            online("link", "https://example.com/link-1.jar"),
+            provider("bumped", "https://cdn.modrinth.com/bumped-1.jar"),
+        ];
+
+        let names =
+            |mods: &[InstalledMod]| mods.iter().map(|mod_| mod_.id.clone()).collect::<Vec<_>>();
+        // Unchanged entries need no review, even without a hash.
+        let review = review_incoming_mods(&current, &current);
+        assert!(review.online.is_empty() && review.unverified.is_empty());
+
+        let incoming = vec![
+            unhashed("kept", "https://cdn.modrinth.com/kept.jar"),
+            online("link", "https://example.com/link-2.jar"),
+            unhashed("bumped", "https://cdn.modrinth.com/bumped-2.jar"),
+            provider("added", "https://cdn.modrinth.com/added.jar"),
+            online_mod("new-link", "https://example.com/new.jar".to_string()),
+        ];
+        let review = review_incoming_mods(&current, &incoming);
+        assert_eq!(names(&review.online), ["link", "new-link"]);
+        assert_eq!(names(&review.unverified), ["bumped", "new-link"]);
+
+        // A whole shared pack is reviewed against nothing.
+        let review = review_incoming_mods(&[], &current);
+        assert_eq!(names(&review.online), ["link"]);
+        assert_eq!(names(&review.unverified), ["kept"]);
     }
 
     #[test]

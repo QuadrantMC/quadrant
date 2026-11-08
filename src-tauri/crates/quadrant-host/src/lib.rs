@@ -50,7 +50,7 @@ use quadrant_core::{
     modpacks::{
         apply_modpack, backfill_mod_hashes, check_manifest_readable, create_modpack, delete_mod,
         delete_modpack, export_modpack_to, get_modpacks, install_modpack, register_mod,
-        set_modpack_sync_date, update_modpack,
+        review_incoming_mods, set_modpack_sync_date, update_modpack,
     },
     ports::{EventSink, SecretStore, SettingsStore},
     prism::{self, PrismInstance, PrismSyncPlan},
@@ -92,6 +92,7 @@ const SETTINGS_SYNC_INTERVAL_SECS: u64 = 120;
 const TOKEN_REFRESH_CHECK_INTERVAL_SECS: u64 = 60;
 const WS_REPLAY_LIMIT: usize = 500;
 const REFRESH_SYNCED_MODPACKS_EVENT: &str = "refreshSyncedModpacks";
+const MODPACK_SYNC_WARNING_EVENT: &str = "modpackSyncWarning";
 const MODPACK_SYNC_NOTIFICATION_TYPE: &str = "modpack_sync";
 const MODPACK_MEMBERSHIP_NOTIFICATION_TYPE: &str = "modpack_membership";
 static LOGGER_INIT: Once = Once::new();
@@ -385,6 +386,22 @@ impl EventSink for HostEventBridge {
             }
             BackendEvent::RecheckAccountToken => self.emit("recheckAccountToken", Value::Null),
             BackendEvent::ConfigChanged(key) => self.emit("configChanged", key),
+            BackendEvent::ModpackSyncWarning {
+                modpack_id,
+                name,
+                applied,
+                online_mods,
+                unverified_mods,
+            } => self.emit(
+                MODPACK_SYNC_WARNING_EVENT,
+                serde_json::json!({
+                    "modpackId": modpack_id,
+                    "name": name,
+                    "applied": applied,
+                    "onlineMods": online_mods,
+                    "unverifiedMods": unverified_mods,
+                }),
+            ),
         }
     }
 }
@@ -2030,16 +2047,12 @@ impl QuadrantHost {
             .get_bool("autoQuadrantSync")?
             .unwrap_or(false);
 
-        if auto_quadrant_sync {
-            let local_modpack = self.resolve_local_modpack_for_sync(&synced_modpack).await?;
-            let local_modpack = self
-                .maybe_backfill_local_modpack_id(local_modpack, &synced_modpack)
+        if auto_quadrant_sync
+            && let Some(local_modpack) =
+                self.resolve_local_modpack_for_sync(&synced_modpack).await?
+        {
+            self.maybe_apply_remote_modpack_update(&local_modpack, &synced_modpack)
                 .await?;
-
-            if let Some(local_modpack) = local_modpack {
-                self.maybe_apply_remote_modpack_update(&local_modpack, &synced_modpack)
-                    .await?;
-            }
         }
 
         self.inner
@@ -2069,53 +2082,18 @@ impl QuadrantHost {
             .ok_or_else(|| anyhow!("modpack sync fallback fetch returned no modpack"))
     }
 
+    /// Only a local pack recording the synced pack's id takes its updates
+    /// unasked. A pack that merely shares its name may be a different one.
     async fn resolve_local_modpack_for_sync(
         &self,
         synced_modpack: &SyncedModpack,
     ) -> Result<Option<LocalModpack>> {
-        let modpacks = get_modpacks(&self.get_minecraft_folder()?, true).await?;
-
-        if let Some(local_modpack) = modpacks
-            .iter()
+        Ok(get_modpacks(&self.get_minecraft_folder()?, true)
+            .await?
+            .into_iter()
             .find(|modpack| {
                 modpack.modpack_id.as_deref() == Some(synced_modpack.modpack_id.as_str())
-            })
-            .cloned()
-        {
-            return Ok(Some(local_modpack));
-        }
-
-        Ok(modpacks.into_iter().find(|modpack| {
-            modpack.modpack_id.is_none()
-                && modpack.last_synced != 0
-                && modpack.name == synced_modpack.name
-        }))
-    }
-
-    async fn maybe_backfill_local_modpack_id(
-        &self,
-        local_modpack: Option<LocalModpack>,
-        synced_modpack: &SyncedModpack,
-    ) -> Result<Option<LocalModpack>> {
-        let Some(mut local_modpack) = local_modpack else {
-            return Ok(None);
-        };
-
-        if local_modpack.modpack_id.as_deref() == Some(synced_modpack.modpack_id.as_str()) {
-            return Ok(Some(local_modpack));
-        }
-        if local_modpack.modpack_id.is_some() {
-            return Ok(None);
-        }
-
-        let local_sync_time = u64::try_from(local_modpack.last_synced / 1000).unwrap_or_default();
-        self.persist_sync_metadata(
-            &local_modpack.name,
-            local_sync_time,
-            Some(synced_modpack.modpack_id.as_str()),
-        )?;
-        local_modpack.modpack_id = Some(synced_modpack.modpack_id.clone());
-        Ok(Some(local_modpack))
+            }))
     }
 
     async fn maybe_apply_remote_modpack_update(
@@ -2128,7 +2106,32 @@ impl QuadrantHost {
             return Ok(());
         }
 
-        let remote_mods = serde_json::from_str(&synced_modpack.mods)?;
+        local_modpack.ensure_manifest_readable()?;
+        let remote_mods: Vec<InstalledMod> = serde_json::from_str(&synced_modpack.mods)?;
+        // Whoever can push to a pack decides which files its members run, so
+        // a link to an arbitrary host waits for the user to apply it.
+        let review = review_incoming_mods(&local_modpack.mods, &remote_mods);
+        let warning = |applied| {
+            let names = |mods: &[InstalledMod]| {
+                mods.iter()
+                    .map(|mod_| mod_.display_name().to_string())
+                    .collect()
+            };
+            BackendEvent::ModpackSyncWarning {
+                modpack_id: synced_modpack.modpack_id.clone(),
+                name: local_modpack.name.clone(),
+                applied,
+                online_mods: names(&review.online),
+                unverified_mods: names(&review.unverified),
+            }
+        };
+        if !review.online.is_empty() {
+            log::warn!(
+                "Held back a synced update of \"{}\": it adds or changes Online mods",
+                local_modpack.name
+            );
+            return self.inner.event_sink.publish(warning(false));
+        }
         if !self.begin_modpack_update(&local_modpack.name).await {
             return Ok(());
         }
@@ -2151,7 +2154,11 @@ impl QuadrantHost {
         }
         .await;
         self.finish_modpack_update(&local_modpack.name).await;
-        result
+        result?;
+        if !review.unverified.is_empty() {
+            self.inner.event_sink.publish(warning(true))?;
+        }
+        Ok(())
     }
 
     async fn begin_modpack_update(&self, modpack_name: &str) -> bool {
@@ -2784,10 +2791,14 @@ mod tests {
     };
     use quadrant_core::{
         account::KEYRING_SERVICE,
+        account::quadrant_sync::SyncedModpack,
         content::{ContentLocation, ContentLocationKind, PACK_TYPES},
         events::{BackendEvent, ModProgressPayload},
         mc_mod::ModType,
-        models::{LocalModpack, ModLoader, SyncInfo, modpack_path},
+        models::{
+            InstalledMod, InstalledModpack, LocalModpack, ModLoader, ModSource, SyncInfo,
+            modpack_path,
+        },
         ports::{EventSink, SettingsStore},
         prism::PrismSyncPlan,
     };
@@ -3020,6 +3031,107 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("can't read"), "{error}");
         assert!(host.share_modpack("pack".to_string()).await.is_err());
+    }
+
+    fn synced_modpack(mods: &[InstalledMod]) -> SyncedModpack {
+        SyncedModpack {
+            name: "pack".to_string(),
+            minecraft_version: "1.21.1".to_string(),
+            mod_loader: ModLoader::Fabric,
+            mods: serde_json::to_string(mods).unwrap(),
+            owners: Vec::new(),
+            last_synced: 1_762_000_100,
+            modpack_id: "modpack-7".to_string(),
+        }
+    }
+
+    fn seed_synced_pack(host: &QuadrantHost, mc_folder: &Path, mods: Vec<InstalledMod>) -> String {
+        let manifest = serde_json::to_string_pretty(&InstalledModpack {
+            mod_config_version: "2".to_string(),
+            quadrant_version: String::new(),
+            name: "pack".to_string(),
+            version: "1.21.1".to_string(),
+            mod_loader: ModLoader::Fabric,
+            mods,
+        })
+        .unwrap();
+        fs::write(
+            modpack_path(mc_folder, "pack").join("modConfigV2.json"),
+            &manifest,
+        )
+        .unwrap();
+        host.persist_sync_metadata("pack", 1_762_000_000, Some("modpack-7"))
+            .unwrap();
+        manifest
+    }
+
+    #[tokio::test]
+    async fn an_automatic_update_with_online_mods_waits_for_the_user() {
+        let temp_dir = tempdir().unwrap();
+        let (host, mc_folder) = sync_host(temp_dir.path());
+        let kept = InstalledMod::minimal(
+            "kept".to_string(),
+            ModSource::Modrinth,
+            "https://cdn.modrinth.com/kept.jar".to_string(),
+        );
+        let manifest = seed_synced_pack(&host, &mc_folder, vec![kept.clone()]);
+        let mut events = host.subscribe_events();
+        let local = host.get_modpacks(false).await.unwrap().remove(0);
+        let planted = InstalledMod {
+            name: "Sodium".to_string(),
+            ..InstalledMod::minimal(
+                "sodium".to_string(),
+                ModSource::Online,
+                "https://evil.example/sodium.jar".to_string(),
+            )
+        };
+
+        host.maybe_apply_remote_modpack_update(&local, &synced_modpack(&[kept, planted]))
+            .await
+            .unwrap();
+
+        let envelope = events.recv().await.unwrap();
+        assert_eq!(envelope.event, "modpackSyncWarning");
+        assert_eq!(
+            envelope.payload,
+            json!({
+                "modpackId": "modpack-7",
+                "name": "pack",
+                "applied": false,
+                "onlineMods": ["Sodium"],
+                "unverifiedMods": ["Sodium"],
+            })
+        );
+        assert_eq!(
+            fs::read_to_string(modpack_path(&mc_folder, "pack").join("modConfigV2.json")).unwrap(),
+            manifest
+        );
+        let listed = host.get_modpacks(false).await.unwrap();
+        assert_eq!(listed[0].last_synced, 1_762_000_000_000);
+    }
+
+    #[tokio::test]
+    async fn automatic_updates_reach_only_the_pack_recording_the_synced_id() {
+        let temp_dir = tempdir().unwrap();
+        let (host, mc_folder) = sync_host(temp_dir.path());
+        seed_synced_pack(&host, &mc_folder, Vec::new());
+        let synced = synced_modpack(&[]);
+        assert!(
+            host.resolve_local_modpack_for_sync(&synced)
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        // Synced once under the same name, but recording no id.
+        host.persist_sync_metadata("pack", 1_762_000_000, None)
+            .unwrap();
+        assert!(
+            host.resolve_local_modpack_for_sync(&synced)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -3774,5 +3886,34 @@ mod tests {
         let envelope = receiver.recv().await.unwrap();
         assert_eq!(envelope.event, "configChanged");
         assert_eq!(envelope.payload, json!("uiScale"));
+    }
+
+    #[tokio::test]
+    async fn event_bridge_forwards_sync_warnings_in_camel_case() {
+        let bridge = HostEventBridge::new();
+        let mut receiver = bridge.subscribe();
+
+        bridge
+            .publish(BackendEvent::ModpackSyncWarning {
+                modpack_id: "modpack-7".to_string(),
+                name: "pack".to_string(),
+                applied: true,
+                online_mods: Vec::new(),
+                unverified_mods: vec!["Sodium".to_string(), "Lithium".to_string()],
+            })
+            .unwrap();
+
+        let envelope = receiver.recv().await.unwrap();
+        assert_eq!(envelope.event, "modpackSyncWarning");
+        assert_eq!(
+            envelope.payload,
+            json!({
+                "modpackId": "modpack-7",
+                "name": "pack",
+                "applied": true,
+                "onlineMods": [],
+                "unverifiedMods": ["Sodium", "Lithium"],
+            })
+        );
     }
 }
