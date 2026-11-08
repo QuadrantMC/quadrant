@@ -321,18 +321,6 @@ function App() {
         cleanupFns.push(nativeDecorationsUnlisten);
       }
 
-      const configChangeUnlisten = await config.onChange(async (key) => {
-        if (key === "lastSettingsUpdated") {
-          return;
-        }
-        await config.set("lastSettingsUpdated", new Date().toISOString());
-      });
-      if (isUnmounted) {
-        configChangeUnlisten();
-      } else {
-        cleanupFns.push(configChangeUnlisten);
-      }
-
       const locale = await config.get<string>("locale");
       if (locale) {
         await quadrantLocale.changeLanguage(locale);

@@ -32,7 +32,8 @@ describe("browser settings subscriptions", () => {
     await writer.set("uiScale", 150);
 
     expect(await reader.get("uiScale")).toBe(150);
-    expect(onChange).toHaveBeenCalledExactlyOnceWith("uiScale");
+    // uiScale is a synced setting, so the edit also advances the sync clock.
+    expect(onChange.mock.calls).toEqual([["uiScale"], ["lastSettingsUpdated"]]);
     expect(onScaleChange).toHaveBeenCalledExactlyOnceWith(150);
   });
 
@@ -86,7 +87,7 @@ describe("browser settings subscriptions", () => {
 
     await store.delete("uiScale");
 
-    expect(onChange).toHaveBeenCalledExactlyOnceWith("uiScale");
+    expect(onChange.mock.calls).toEqual([["uiScale"], ["lastSettingsUpdated"]]);
     // A removed key reads back as null, the same as one written null.
     expect(onScaleChange).toHaveBeenCalledExactlyOnceWith(null);
     expect(onLanguageChange).not.toHaveBeenCalled();
@@ -109,5 +110,39 @@ describe("browser settings subscriptions", () => {
 
     await expect(store.set("uiScale", undefined)).rejects.toThrow(TypeError);
     expect(await store.get("uiScale")).toBe(150);
+  });
+});
+
+describe("settings sync clock", () => {
+  const clock = (store: ReturnType<typeof createDesktopStore>) =>
+    store.get<string>("lastSettingsUpdated");
+
+  it("advances when the user edits a synced setting", async () => {
+    const store = createDesktopStore("config.json");
+    expect(await clock(store)).toBeUndefined();
+
+    await store.set("curseforge", false);
+
+    expect(Date.parse((await clock(store)) as string)).not.toBeNaN();
+  });
+
+  it("advances when the user removes a synced setting", async () => {
+    const store = createDesktopStore("config.json");
+    await store.delete("uiScale");
+    expect(await clock(store)).toBeDefined();
+  });
+
+  it.each(["lastPageName", "oauthState", "searchFilters", "mcFolder"])(
+    "stays put when %s changes",
+    async (key) => {
+      const store = createDesktopStore("config.json");
+      await store.set(key, "value");
+      expect(await clock(store)).toBeUndefined();
+    },
+  );
+
+  it("stays put for stores other than the config", async () => {
+    await createDesktopStore("other.json").set("uiScale", 150);
+    expect(await clock(createDesktopStore("other.json"))).toBeUndefined();
   });
 });

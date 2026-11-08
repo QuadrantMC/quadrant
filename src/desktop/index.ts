@@ -9,6 +9,7 @@ import type {
 import { ProgressBarStatus } from "./types";
 export type { UpdateSwitchPayload } from "./types";
 import { getRuntimeAdapter } from "./runtime";
+import { bumpsSettingsClock } from "../settingsSync";
 
 async function withRuntime<T>(
   callback: (runtime: RuntimeAdapter) => Promise<T>,
@@ -34,11 +35,26 @@ export class DesktopStore {
   }
 
   async set(key: string, value: unknown): Promise<void> {
-    await (await this.adapter()).set(key, value);
+    const adapter = await this.adapter();
+    await adapter.set(key, value);
+    await this.markSettingsEdited(adapter, key);
   }
 
   async delete(key: string): Promise<void> {
-    await (await this.adapter()).delete(key);
+    const adapter = await this.adapter();
+    await adapter.delete(key);
+    await this.markSettingsEdited(adapter, key);
+  }
+
+  // The settings sync compares this timestamp to decide which side is newer,
+  // so it moves only when the user changed a synced setting.
+  private async markSettingsEdited(
+    adapter: ReturnType<RuntimeAdapter["createStore"]>,
+    key: string,
+  ) {
+    if (this.name === "config.json" && bumpsSettingsClock(key)) {
+      await adapter.set("lastSettingsUpdated", new Date().toISOString());
+    }
   }
 
   async save(): Promise<void> {
