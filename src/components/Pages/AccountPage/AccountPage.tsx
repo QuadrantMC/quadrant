@@ -120,9 +120,13 @@ export default function AccountPage() {
           {t("hello", { name: accountInfo.name })}
         </h1>
         <div className="w-[50%] items-center justify-center text-center font-bold">
-          <h2 className="bg-slate-800 p-2 rounded-4xl my-4">
-            {t("email")}: {accountInfo.email}
-          </h2>
+          {/* Quadrant ID only shares the email with a token that holds an
+              email scope, which the desktop doesn't request. */}
+          {accountInfo.email !== "" && (
+            <h2 className="bg-slate-800 p-2 rounded-4xl my-4">
+              {t("email")}: {accountInfo.email}
+            </h2>
+          )}
           <h2 className="bg-slate-800 p-2 rounded-4xl my-4">
             {t("username")}: {accountInfo.login}
           </h2>

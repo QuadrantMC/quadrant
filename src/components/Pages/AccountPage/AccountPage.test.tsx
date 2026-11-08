@@ -222,6 +222,25 @@ describe("AccountPage", () => {
     });
   });
 
+  it("shows the email only when the account info carries one", async () => {
+    const account = {
+      name: "Me",
+      login: "me",
+      quadrant_sync_limit: 1,
+      quadrant_share_limit: 1,
+    };
+    getAccountInfo.mockResolvedValue({ ...account, email: "" });
+    const { unmount } = render(<AccountPage />);
+    // The test renders translation keys.
+    expect(await screen.findByText("username: me")).toBeTruthy();
+    expect(screen.queryByText(/^email:/)).toBeNull();
+    unmount();
+
+    getAccountInfo.mockResolvedValue({ ...account, email: "me@example.com" });
+    render(<AccountPage />);
+    expect(await screen.findByText("email: me@example.com")).toBeTruthy();
+  });
+
   it("tells the rest of the app when the user signs out", async () => {
     getAccountInfo.mockResolvedValue({
       name: "Me",

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use clap::Subcommand;
-use quadrant_core::account::pkce::Pkce;
+use quadrant_core::account::{id::AccountInfo, pkce::Pkce};
 use serde_json::Value;
 
 use crate::{
@@ -47,31 +47,40 @@ pub async fn run(command: AccountCommand, ctx: &Ctx) -> Result<Report> {
         AccountCommand::Info => {
             ctx.require_account_build()?;
             let info = host.get_account_info().await?;
-            let unread = info
-                .notifications
-                .iter()
-                .filter(|notification| !notification.read)
-                .count();
-            Report::new(&info, |info| {
-                table(&[
-                    ["name".to_string(), info.name.clone()],
-                    ["login".to_string(), info.login.clone()],
-                    ["email".to_string(), info.email.clone()],
-                    [
-                        "sync limit".to_string(),
-                        info.quadrant_sync_limit.to_string(),
-                    ],
-                    [
-                        "share limit".to_string(),
-                        info.quadrant_share_limit.to_string(),
-                    ],
-                    ["unread notifications".to_string(), unread.to_string()],
-                ])
-            })
+            Report::new(&info, info_table)
         }
         AccountCommand::Open => Ok(browse(ctx, ACCOUNT_URL)),
         AccountCommand::Register => Ok(browse(ctx, REGISTER_URL)),
     }
+}
+
+fn info_table(info: &AccountInfo) -> String {
+    let unread = info
+        .notifications
+        .iter()
+        .filter(|notification| !notification.read)
+        .count();
+    let mut rows = vec![
+        ["name".to_string(), info.name.clone()],
+        ["login".to_string(), info.login.clone()],
+    ];
+    // Quadrant ID sends an empty email to a token without an email scope,
+    // which the desktop sign-in doesn't request.
+    if !info.email.is_empty() {
+        rows.push(["email".to_string(), info.email.clone()]);
+    }
+    rows.extend([
+        [
+            "sync limit".to_string(),
+            info.quadrant_sync_limit.to_string(),
+        ],
+        [
+            "share limit".to_string(),
+            info.quadrant_share_limit.to_string(),
+        ],
+        ["unread notifications".to_string(), unread.to_string()],
+    ]);
+    table(&rows)
 }
 
 fn browse(ctx: &Ctx, url: &str) -> Report {
@@ -157,4 +166,31 @@ async fn finish_login(
     ctx.host.oauth2_login(code, redirect_uri, verifier).await?;
     let info = ctx.host.get_account_info().await?;
     Report::new(&info, |info| format!("Signed in as {}.", info.name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(email: &str) -> AccountInfo {
+        AccountInfo {
+            id: "id".to_string(),
+            name: "Me".to_string(),
+            email: email.to_string(),
+            quadrant_sync_limit: 3,
+            quadrant_share_limit: 5,
+            login: "me".to_string(),
+            notifications: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn info_leaves_out_an_email_the_server_withheld() {
+        let table = info_table(&account(""));
+        assert!(!table.contains("email"), "{table}");
+        assert!(table.contains("login"), "{table}");
+
+        let table = info_table(&account("me@example.com"));
+        assert!(table.contains("me@example.com"), "{table}");
+    }
 }
