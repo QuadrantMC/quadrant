@@ -19,9 +19,7 @@ use std::{
     collections::HashSet,
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
 };
-use tokio::sync::Mutex;
 use zip::write::{ExtendedFileOptions, FileOptions};
 
 /// Opens `path`, creating it, and holds an exclusive advisory lock on it until
@@ -990,51 +988,27 @@ pub async fn install_modpack(
         Err(error) => return Err(error.into()),
     };
 
-    for mod_ in &mut mod_config.mods {
-        if mod_.name.is_empty() && mod_.source != ModSource::Online {
-            match enrich_installed_mod(mod_.clone()).await {
-                Ok(enriched) => *mod_ = enriched,
-                Err(e) => log::warn!(
-                    "Failed to enrich mod {} in modpack \"{}\": {}",
-                    mod_.id,
-                    mod_config.name,
-                    e
-                ),
-            }
-        }
-    }
+    enrich_unnamed_mods(&mut mod_config).await;
 
     let staging = modpack_folder.join(format!(
         ".quadrant-install-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ));
     std::fs::create_dir(&staging)?;
-    let downloaded = download_missing_files(
+    let staging = StagingDir(staging);
+    download_missing_files(
         &mut mod_config.mods,
         &expected_file_names,
         &modpack_folder,
-        &staging,
+        &staging.0,
         old_mod_config.as_ref(),
         settings,
         event_sink,
     )
-    .await;
-    if let Err(error) = downloaded {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(error);
-    }
+    .await?;
 
-    let locked = lock_manifests(mc_folder).and_then(|lock| {
-        let current = read_manifest(&modpack_folder, &mod_config.name)?;
-        Ok((lock, current))
-    });
-    let (_lock, current_mod_config) = match locked {
-        Ok(locked) => locked,
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(error);
-        }
-    };
+    let _lock = lock_manifests(mc_folder)?;
+    let current_mod_config = read_manifest(&modpack_folder, &mod_config.name)?;
     // Only files the manifest tracks now go, and the plan is made before
     // anything moves. Entries from an older URL policy still name their jar.
     let expected_lowercase: HashSet<_> = expected_file_names
@@ -1049,11 +1023,11 @@ pub async fn install_modpack(
         .map(|old_name| modpack_folder.join(old_name))
         .collect();
 
-    for entry in std::fs::read_dir(&staging)? {
+    for entry in std::fs::read_dir(&staging.0)? {
         let entry = entry?;
         std::fs::rename(entry.path(), modpack_folder.join(entry.file_name()))?;
     }
-    std::fs::remove_dir(&staging)?;
+    drop(staging);
 
     for old_path in obsolete_files {
         if old_path.is_file() {
@@ -1140,6 +1114,10 @@ fn write_export_archive(
     Ok(())
 }
 
+/// How many files a pack install downloads at once. More only gets Quadrant
+/// rate limited or reset by the CDNs.
+const DOWNLOAD_CONCURRENCY: usize = 6;
+
 /// Fills `staging` with every entry's file that the pack folder does not
 /// already hold, and records each entry's `sha512`. An entry that carries one
 /// must match it, or nothing is installed.
@@ -1153,7 +1131,6 @@ async fn download_missing_files(
     event_sink: &impl EventSink,
 ) -> Result<()> {
     let total_mods = mods.len();
-    let downloaded_mods = Arc::new(Mutex::new(0_usize));
     let mut downloads = Vec::new();
     for (index, (mod_, file_name)) in mods.iter_mut().zip(file_names).enumerate() {
         let final_path = modpack_folder.join(file_name);
@@ -1178,19 +1155,33 @@ async fn download_missing_files(
             }
         }
 
-        let download = download_mod_concurrently(
-            mod_.clone(),
-            staging.join(file_name),
-            settings,
-            event_sink,
-            total_mods,
-            downloaded_mods.clone(),
-        );
+        let download = download_mod(mod_.clone(), staging.join(file_name));
         downloads.push(async move { download.await.map(|hash| (index, hash)) });
     }
 
-    for (index, hash) in futures::future::try_join_all(downloads).await? {
+    // Dropping the stream on the first error cancels the downloads in flight.
+    let mut downloads = futures::stream::iter(downloads).buffer_unordered(DOWNLOAD_CONCURRENCY);
+    let mut downloaded = 0_usize;
+    let (mut modrinth, mut curseforge) = (0_i64, 0_i64);
+    while let Some(result) = downloads.next().await {
+        let (index, hash) = result?;
+        match mods[index].source {
+            ModSource::Modrinth => modrinth += 1,
+            ModSource::CurseForge => curseforge += 1,
+            ModSource::Online => {}
+        }
         mods[index].sha512 = Some(hash);
+        downloaded += 1;
+        event_sink.publish(BackendEvent::ModpackDownloadProgress(
+            downloaded as f64 / total_mods as f64,
+        ))?;
+    }
+
+    for (key, count) in [("modrinthUsage", modrinth), ("curseforgeUsage", curseforge)] {
+        if count > 0 {
+            let current = settings.get_i64(key)?.unwrap_or_default();
+            settings.set_i64(key, current + count)?;
+        }
     }
     Ok(())
 }
@@ -1198,14 +1189,9 @@ async fn download_missing_files(
 /// Streams one entry's file to `file` and returns its SHA-512, failing with
 /// [`ErrorCode::Checksum`](crate::error::ErrorCode::Checksum) when the entry
 /// records a different one.
-async fn download_mod_concurrently(
-    mod_: InstalledMod,
-    file: PathBuf,
-    settings: &impl SettingsStore,
-    event_sink: &impl EventSink,
-    total_mods: usize,
-    downloaded_mods: Arc<Mutex<usize>>,
-) -> Result<String> {
+async fn download_mod(mod_: InstalledMod, file: PathBuf) -> Result<String> {
+    use tokio::io::AsyncWriteExt;
+
     safe_download_file_name(&mod_.download_url, &mod_.source)?;
     let response = crate::mc_mod::http::provider_http_client()
         .get(&mod_.download_url)
@@ -1213,13 +1199,14 @@ async fn download_mod_concurrently(
         .await?
         .error_for_status()?;
     let mut bytes = response.bytes_stream();
-    let mut file = std::fs::File::create(file)?;
+    let mut file = tokio::fs::File::create(file).await?;
     let mut hasher = sha2::Sha512::new();
     while let Some(item) = bytes.next().await {
         let item = item?;
         hasher.update(&item);
-        file.write_all(&item)?;
+        file.write_all(&item).await?;
     }
+    file.flush().await?;
     let hash = hex::encode(hasher.finalize());
     if mod_
         .sha512
@@ -1228,23 +1215,17 @@ async fn download_mod_concurrently(
     {
         return Err(anyhow::Error::from(crate::error::ErrorCode::Checksum));
     }
-
-    let current_key = match mod_.source {
-        ModSource::CurseForge => Some("curseforgeUsage"),
-        ModSource::Modrinth => Some("modrinthUsage"),
-        ModSource::Online => None,
-    };
-    if let Some(current_key) = current_key {
-        let current_value = settings.get_i64(current_key)?.unwrap_or_default();
-        settings.set_i64(current_key, current_value + 1)?;
-    }
-
-    let mut downloaded = downloaded_mods.lock().await;
-    *downloaded += 1;
-    event_sink.publish(BackendEvent::ModpackDownloadProgress(
-        *downloaded as f64 / total_mods as f64,
-    ))?;
     Ok(hash)
+}
+
+/// The `.quadrant-install-*` folder a pack install downloads into. It is
+/// removed however the install ends, including when its future is dropped.
+struct StagingDir(PathBuf);
+
+impl Drop for StagingDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 #[cfg(test)]
@@ -2286,6 +2267,110 @@ mod tests {
         assert!(pack_folder.join("quadrantSync.json").exists());
         assert!(pack_folder.join("notes.txt").exists());
         assert!(!pack_folder.join("new.jar").exists());
+        assert!(!has_staging_folder(&pack_folder));
+    }
+
+    fn has_staging_folder(pack_folder: &Path) -> bool {
+        std::fs::read_dir(pack_folder).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".quadrant-install-")
+        })
+    }
+
+    #[tokio::test]
+    async fn dropped_install_removes_its_staging_folder() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/slow.jar");
+            then.status(200)
+                .delay(std::time::Duration::from_secs(10))
+                .body("slow");
+        });
+        let (_dir, mc_folder) = setup_mc_folder();
+        let pack = InstalledModpack {
+            mod_config_version: "2".to_string(),
+            quadrant_version: String::new(),
+            name: "alpha".to_string(),
+            version: "1.20.1".to_string(),
+            mod_loader: ModLoader::Fabric,
+            mods: vec![online_mod(
+                "slow",
+                format!("{}/slow.jar", server.base_url()),
+            )],
+        };
+        let store = MemoryStore::default();
+        let events = CollectingEvents::default();
+        let install = install_modpack(&mc_folder, pack, &store, &events);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(300), install)
+                .await
+                .is_err()
+        );
+
+        assert!(!has_staging_folder(&modpack_path(&mc_folder, "alpha")));
+    }
+
+    #[tokio::test]
+    async fn install_modpack_counts_provider_usage_once_per_install() {
+        let server = MockServer::start();
+        let jars = server.mock(|when, then| {
+            when.method(GET).path_includes("/many-");
+            then.status(200).body("jar");
+        });
+        let (_dir, mc_folder) = setup_mc_folder();
+        let store = MemoryStore::default();
+        store.set_i64("modrinthUsage", 5).unwrap();
+        let events = CollectingEvents::default();
+        let mods = (0..(DOWNLOAD_CONCURRENCY * 2 + 1))
+            .map(|index| {
+                InstalledMod::minimal(
+                    format!("mod-{index}"),
+                    ModSource::Modrinth,
+                    format!("{}/many-{index}.jar", server.base_url()),
+                )
+            })
+            .map(|mod_| InstalledMod {
+                name: mod_.id.clone(),
+                ..mod_
+            })
+            .collect::<Vec<_>>();
+        let total = mods.len();
+        install_modpack(
+            &mc_folder,
+            InstalledModpack {
+                mod_config_version: "2".to_string(),
+                quadrant_version: String::new(),
+                name: "many".to_string(),
+                version: "1.20.1".to_string(),
+                mod_loader: ModLoader::Fabric,
+                mods,
+            },
+            &store,
+            &events,
+        )
+        .await
+        .unwrap();
+
+        jars.assert_calls(total);
+        assert_eq!(
+            store.get_i64("modrinthUsage").unwrap(),
+            Some(5 + total as i64)
+        );
+        let progress: Vec<f64> = events
+            .events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                BackendEvent::ModpackDownloadProgress(value) => Some(*value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(progress.len(), total + 1);
+        assert!(progress.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(!has_staging_folder(&modpack_path(&mc_folder, "many")));
     }
 
     #[cfg(not(target_os = "windows"))]
