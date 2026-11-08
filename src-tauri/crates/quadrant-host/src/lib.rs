@@ -263,8 +263,8 @@ impl JsonFileStore {
             }
             Err(error) => return Err(error.into()),
         };
-        Ok(serde_json::from_str::<HashMap<String, Value>>(&raw)
-            .with_context(|| format!("failed to parse {}", path.display()))?)
+        serde_json::from_str::<HashMap<String, Value>>(&raw)
+            .with_context(|| format!("failed to parse {}", path.display()))
     }
 
     /// Held around every reload-modify-persist, so a write from another
