@@ -4,11 +4,11 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
+use quadrant_core::account::pkce::CODE_CHALLENGE_METHOD;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use quadrant_core::account::pkce::CODE_CHALLENGE_METHOD;
 use url::Url;
 
 use crate::i18n;
