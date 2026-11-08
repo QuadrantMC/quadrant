@@ -39,6 +39,7 @@ const pack: InstalledModpack = {
     id,
     downloadUrl: "",
     source: ModSource.Modrinth,
+    sha512: "a".repeat(128),
   })),
 };
 
@@ -126,6 +127,73 @@ describe("SharedModpackView", () => {
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.getByRole("button", { name: "Download" })).toBeVisible();
     error.mockRestore();
+  });
+
+  describe("when the pack has files Quadrant can't vouch for", () => {
+    const risky: InstalledModpack = {
+      ...pack,
+      mods: [
+        {
+          id: "old",
+          name: "Old Mod",
+          downloadUrl: "https://cdn.modrinth.com/old.jar",
+          source: ModSource.Modrinth,
+        },
+        {
+          id: "linked",
+          name: "Linked Mod",
+          downloadUrl: "https://files.example.org/linked.jar",
+          source: ModSource.Online,
+          sha512: "b".repeat(128),
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      getMod.mockReturnValue(new Promise(() => {}));
+    });
+
+    it("lists both kinds of mods and the host of the linked one up front", () => {
+      render(<SharedModpackView modpack={risky} />);
+
+      const alert = screen.getAllByRole("alert")[0];
+      expect(within(alert).getByText(/can't verify these files/i)).toBeVisible();
+      expect(within(alert).getByText("Old Mod")).toBeVisible();
+      expect(
+        within(alert).getByText(/not from Modrinth or CurseForge/i),
+      ).toBeVisible();
+      expect(
+        within(alert).getByText("Linked Mod (files.example.org)"),
+      ).toBeVisible();
+    });
+
+    it("installs only after the user confirms the warnings", async () => {
+      render(<SharedModpackView modpack={risky} />);
+      await userEvent.click(screen.getByRole("button", { name: "Download" }));
+      expect(
+        await screen.findByRole("button", { name: "Install anyway" }),
+      ).toBeVisible();
+      expect(installModpack).not.toHaveBeenCalled();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Install anyway" }),
+      );
+      await waitFor(() => expect(installModpack).toHaveBeenCalledWith(risky));
+    });
+
+    it("does not install when the warnings are cancelled", async () => {
+      render(<SharedModpackView modpack={risky} />);
+      await userEvent.click(screen.getByRole("button", { name: "Download" }));
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Cancel" }),
+      );
+      expect(installModpack).not.toHaveBeenCalled();
+    });
+
+    it("shows no warning for a fully hashed provider pack", () => {
+      render(<SharedModpackView modpack={pack} />);
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
   });
 
   describe("when a local pack already has the name", () => {

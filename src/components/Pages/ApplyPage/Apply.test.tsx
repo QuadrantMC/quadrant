@@ -429,7 +429,9 @@ describe("ApplyPage", () => {
       cloudPack({
         name: "Remote",
         modpack_id: "xyz",
-        mods: JSON.stringify([{ id: "sodium", source: "ModSource.modRinth" }]),
+        mods: JSON.stringify([
+          { id: "sodium", source: "ModSource.modRinth", sha512: "a".repeat(128) },
+        ]),
         last_synced: 42,
       }),
     ]);
@@ -446,7 +448,9 @@ describe("ApplyPage", () => {
     await waitFor(() =>
       expect(installModpack).toHaveBeenCalledWith({
         name: "Remote",
-        mods: [{ id: "sodium", source: "ModSource.modRinth" }],
+        mods: [
+          { id: "sodium", source: "ModSource.modRinth", sha512: "a".repeat(128) },
+        ],
         modLoader: ModLoader.Fabric,
         version: "1.20.1",
       }),
@@ -460,6 +464,35 @@ describe("ApplyPage", () => {
       }),
     );
     expect(changeContent).not.toHaveBeenCalled();
+  });
+
+  it("names the unverifiable mods and installs a cloud-only modpack only once confirmed", async () => {
+    getAccountInfo.mockResolvedValue({ login: "me", quadrant_sync_limit: 5 });
+    getSyncedModpacks.mockResolvedValue([
+      cloudPack({
+        name: "Remote",
+        modpack_id: "xyz",
+        mods: JSON.stringify([{ id: "sodium", source: "ModSource.modRinth" }]),
+      }),
+    ]);
+    installModpack.mockResolvedValue(undefined);
+    render(
+      <SpiedContent>
+        <ApplyPage />
+      </SpiedContent>,
+    );
+
+    await waitFor(() => expect(screen.getByText("Remote")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /^download$/i }));
+
+    expect(await screen.findByText(/can't verify these files/i)).toBeVisible();
+    expect(screen.getByText("sodium")).toBeVisible();
+    expect(installModpack).not.toHaveBeenCalled();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Install anyway" }),
+    );
+    await waitFor(() => expect(installModpack).toHaveBeenCalledTimes(1));
   });
 
   it("opens the details view of a cloud-only modpack without installing", async () => {

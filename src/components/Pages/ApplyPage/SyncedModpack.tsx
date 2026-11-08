@@ -15,7 +15,7 @@ import Button from "../../core/Button";
 import CloudMembersPanel from "./CloudMembersPanel";
 import ModpackBadges from "./ModpackBadges";
 import { formatSyncDate } from "./syncDates";
-import { useModpackInstall } from "./useModpackInstall";
+import { useReviewedModpackInstall } from "./useReviewedModpackInstall";
 import { useReportError } from "../../../useReportError";
 
 export interface SyncedModpackProps {
@@ -44,7 +44,7 @@ export default function SyncedModpackComponent({
     syncedAt: modpack.last_synced,
     modpackId: modpack.modpack_id,
   };
-  const { install, progress } = useModpackInstall(
+  const { install, progress, reviewDialog } = useReviewedModpackInstall(
     modConfigObject,
     syncTarget,
   );
@@ -117,6 +117,7 @@ export default function SyncedModpackComponent({
         </Button>
       </div>
       <CloudMembersPanel modpack={modpack} accountInfo={accountInfo} />
+      {reviewDialog}
     </motion.div>
   );
 }

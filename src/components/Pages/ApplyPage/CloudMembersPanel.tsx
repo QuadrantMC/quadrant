@@ -35,7 +35,7 @@ import { invoke } from "../../../desktop";
 import Button from "../../core/Button";
 import CancelButton from "../../core/CancelButton";
 import ConfirmDialog from "../../core/ConfirmDialog";
-import { useModpackInstall } from "./useModpackInstall";
+import { useReviewedModpackInstall } from "./useReviewedModpackInstall";
 import { useReportError } from "../../../useReportError";
 
 export interface CloudMembersPanelProps {
@@ -84,10 +84,14 @@ export default function CloudMembersPanel({
     modLoader: modpack.mod_loader,
     version: modpack.minecraft_version,
   };
-  const { install: forcePull, progress: pullProgress } = useModpackInstall(
-    modConfigObject,
-    { syncedAt: modpack.last_synced, modpackId: modpack.modpack_id },
-  );
+  const {
+    install: forcePull,
+    progress: pullProgress,
+    reviewDialog,
+  } = useReviewedModpackInstall(modConfigObject, {
+    syncedAt: modpack.last_synced,
+    modpackId: modpack.modpack_id,
+  });
 
   return (
     <Disclosure as="div" className={"w-full"}>
@@ -176,6 +180,7 @@ export default function CloudMembersPanel({
                   </div>
                 </motion.div>
               )}
+              {reviewDialog}
               <ConfirmDialog
                 open={memberToKick !== null}
                 title={t("confirmKickMember", { username: memberToKick })}

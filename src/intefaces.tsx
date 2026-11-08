@@ -44,6 +44,8 @@ export interface LocalModpack {
   modpackId?: string | null;
   mods: LocalMod[];
   unknownMods: boolean;
+  /** Why the pack's manifest can't be read; absent or null when it can. */
+  manifestError?: string | null;
 }
 
 /** A Prism Launcher instance Quadrant can point at one of its modpacks. */
@@ -126,6 +128,10 @@ export interface LocalMod {
   downloadUrl: string;
   source: ModSource;
   slug?: string;
+  name?: string;
+  /** Lowercase hex SHA-512 of the installed file; packs made by older
+   *  versions of Quadrant carry none. */
+  sha512?: string;
 }
 
 export interface Page {

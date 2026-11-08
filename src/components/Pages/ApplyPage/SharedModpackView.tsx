@@ -1,6 +1,6 @@
 /** @format */
 
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import { IMod, InstalledModpack } from "../../../intefaces";
 import { useTranslation } from "react-i18next";
 import Button from "../../core/Button";
@@ -10,7 +10,10 @@ import { getMod, getModpacks } from "../../../tools";
 import Mod from "../../shared/Mod";
 import { ContentContext } from "../../../intefaces";
 import { MdDownload } from "react-icons/md";
-import { ModpackSyncTarget, useModpackInstall } from "./useModpackInstall";
+import { hasWarnings, reviewMods } from "../../../modpackReview";
+import ModpackReviewWarnings from "../../shared/ModpackReviewWarnings";
+import { ModpackSyncTarget } from "./useModpackInstall";
+import { useReviewedModpackInstall } from "./useReviewedModpackInstall";
 
 export interface SharedModpackViewProps {
   modpack: InstalledModpack;
@@ -25,7 +28,13 @@ export default function SharedModpackView({
   const [isLoading, setIsLoading] = useState(true);
   const { t } = useTranslation();
   const context = useContext(ContentContext);
-  const { install, progress } = useModpackInstall(modpack, syncTarget);
+  const { install, progress, reviewDialog } = useReviewedModpackInstall(
+    modpack,
+    syncTarget,
+  );
+  // Online mods have no provider page, so the cards below can't show them;
+  // the warnings list them with their hosts.
+  const review = useMemo(() => reviewMods(modpack.mods), [modpack.mods]);
   const [isReplaceOpen, setIsReplaceOpen] = useState(false);
 
   // An install writes to the folder named after the pack, so a same-named
@@ -132,7 +141,13 @@ export default function SharedModpackView({
             })}
           </div>
         )}
+        {hasWarnings(review) && (
+          <div className="mt-4 font-normal">
+            <ModpackReviewWarnings review={review} />
+          </div>
+        )}
       </section>
+      {reviewDialog}
       <ConfirmDialog
         open={isReplaceOpen}
         title={t("replaceModpackQuestion", { name: modpack.name })}

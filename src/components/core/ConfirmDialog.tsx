@@ -12,7 +12,7 @@ import CancelButton from "./CancelButton";
 export interface ConfirmDialogProps {
   open: boolean;
   title: string;
-  message: string;
+  message: React.ReactNode;
   confirmLabel: string;
   onConfirm: () => void | Promise<unknown>;
   onCancel: () => void;
@@ -33,7 +33,7 @@ export default function ConfirmDialog({
       <div className="fixed inset-0 flex w-screen items-center justify-center p-4">
         <DialogPanel className="max-w-xl space-y-4 rounded-4xl bg-slate-800 p-8">
           <DialogTitle className="font-black text-xl">{title}</DialogTitle>
-          <p>{message}</p>
+          <div>{message}</div>
           <div className="flex">
             <Button
               className="bg-red-700 hover:bg-red-600 w-full"

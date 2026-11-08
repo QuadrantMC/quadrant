@@ -258,5 +258,12 @@
   "datapack": "Набір даних з {{source}}",
   "modpackNameRequired": "Введіть назву модпака.",
   "modpackVersionRequired": "Виберіть версію Minecraft для модпака.",
-  "modpackLoaderRequired": "Виберіть завантажувач модів для модпака."
+  "modpackLoaderRequired": "Виберіть завантажувач модів для модпака.",
+  "reviewUnverifiedWarning": "Quadrant не може перевірити ці файли. Модпак було поширено зі старішої версії Quadrant.",
+  "reviewOnlineWarning": "Ці моди завантажуються за посиланнями, а не з Modrinth чи CurseForge:",
+  "reviewInstallTitle": "Перегляньте {{name}} перед встановленням",
+  "reviewInstallAnyway": "Все одно встановити",
+  "modpackSyncNeedsReview": "Оновлення {{name}} потребує вашої перевірки",
+  "modpackSyncUnverified": "{{name}} оновлено, але Quadrant не зміг перевірити файлів: {{amount}}.",
+  "modpackUnreadable": "Quadrant не може прочитати modConfigV2.json цього модпака ({{error}}). Виправте або видаліть його, перш ніж змінювати чи синхронізувати цей модпак."
 }

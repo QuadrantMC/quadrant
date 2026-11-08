@@ -252,5 +252,12 @@
   "datapack": "Data pack from {{source}}",
   "modpackNameRequired": "Enter a name for the modpack.",
   "modpackVersionRequired": "Pick a Minecraft version for the modpack.",
-  "modpackLoaderRequired": "Pick a mod loader for the modpack."
+  "modpackLoaderRequired": "Pick a mod loader for the modpack.",
+  "reviewUnverifiedWarning": "Quadrant can't verify these files. The pack was shared from an older version of Quadrant.",
+  "reviewOnlineWarning": "These mods download from links, not from Modrinth or CurseForge:",
+  "reviewInstallTitle": "Review {{name}} before installing",
+  "reviewInstallAnyway": "Install anyway",
+  "modpackSyncNeedsReview": "An update to {{name}} needs your review",
+  "modpackSyncUnverified": "{{name}} was updated, but Quadrant couldn't verify {{amount}} of its files.",
+  "modpackUnreadable": "Quadrant can't read this modpack's modConfigV2.json ({{error}}). Fix or remove it before changing or syncing this modpack."
 }
