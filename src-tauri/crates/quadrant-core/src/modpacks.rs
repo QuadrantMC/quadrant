@@ -153,6 +153,28 @@ pub(crate) fn validate_new_modpack_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// [`validate_new_modpack_name`] unless a pack folder has exactly this name,
+/// so packs named before the portable rule can still be updated. Only an exact
+/// entry counts: Windows resolves `Survival.` to `Survival`, which must still be
+/// refused.
+fn validate_install_modpack_name(mc_folder: &Path, name: &str) -> Result<()> {
+    validate_modpack_name(name)?;
+    let entries = match std::fs::read_dir(mc_folder.join("modpacks")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return validate_new_modpack_name(name);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_name() == std::ffi::OsStr::new(name) && entry.path().is_dir() {
+            return Ok(());
+        }
+    }
+    validate_new_modpack_name(name)
+}
+
 /// Whether a manifest entry from `source` may download from `host`. Provider
 /// entries come only from that provider's CDN, so a shared or synced pack can
 /// not dress up another host as Modrinth or CurseForge.
@@ -605,7 +627,9 @@ pub fn update_modpack(
     mod_loader: Option<ModLoader>,
 ) -> Result<LocalModpack> {
     validate_modpack_name(modpack_source)?;
-    if let Some(name) = name.as_deref() {
+    if let Some(name) = name.as_deref()
+        && name != modpack_source
+    {
         validate_new_modpack_name(name)?;
     }
     log::info!(
@@ -954,7 +978,7 @@ pub async fn install_modpack(
     settings: &impl SettingsStore,
     event_sink: &impl EventSink,
 ) -> Result<()> {
-    validate_new_modpack_name(&mod_config.name)?;
+    validate_install_modpack_name(mc_folder, &mod_config.name)?;
     log::info!(
         "Installing modpack \"{}\" ({} mod(s))",
         mod_config.name,
@@ -1692,6 +1716,65 @@ mod tests {
         let error = install(pack("Survival", mods)).await.unwrap_err();
         assert!(error.to_string().contains("Duplicate download file name"));
         assert_eq!(std::fs::read(&manifest).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn a_pack_named_before_the_portable_rule_can_still_be_edited_and_synced() {
+        // Each name is legal on this platform but not portable: Windows takes
+        // 128 UTF-16 units that are over 255 bytes of UTF-8.
+        let legacy = if cfg!(windows) {
+            "é".repeat(128)
+        } else {
+            "a:b".to_string()
+        };
+        assert!(!is_portable_file_name(&legacy));
+        let (_dir, mc_folder) = setup_mc_folder();
+        let pack = |version: &str| InstalledModpack {
+            mod_config_version: "2".to_string(),
+            quadrant_version: String::new(),
+            name: legacy.clone(),
+            version: version.to_string(),
+            mod_loader: ModLoader::Fabric,
+            mods: Vec::new(),
+        };
+        let store = MemoryStore::default();
+        let events = CollectingEvents::default();
+        assert!(
+            install_modpack(&mc_folder, pack("1.20.1"), &store, &events)
+                .await
+                .is_err()
+        );
+        let folder = modpack_path(&mc_folder, &legacy);
+        std::fs::create_dir_all(&folder).unwrap();
+        write_manifest(&folder, &pack("1.20.1")).unwrap();
+
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        let edited = update_modpack(
+            &mc_folder,
+            &listed,
+            &legacy,
+            Some(legacy.clone()),
+            Some("1.21".to_string()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(edited.version, "1.21");
+        install_modpack(&mc_folder, pack("1.21.1"), &store, &events)
+            .await
+            .unwrap();
+        assert_eq!(read_manifest(&mc_folder, &legacy).version, "1.21.1");
+
+        assert!(
+            update_modpack(
+                &mc_folder,
+                &listed,
+                &legacy,
+                Some(format!("{legacy}?")),
+                None,
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]
