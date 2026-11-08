@@ -1,7 +1,13 @@
 /** @format */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 
 const getAccountInfo = vi.fn();
 const startOAuthServer = vi.fn();
@@ -11,30 +17,43 @@ const storeSet = vi.fn();
 const clearAccountToken = vi.fn();
 const emit = vi.fn();
 const listen = vi.fn();
+const invoke = vi.fn();
+const openIn = vi.fn();
+// What the config store holds; sign-in keeps its state and verifier here.
+const store = new Map<string, unknown>();
 
 vi.mock("../../../tools", () => ({
   clearAccountToken: (...a: unknown[]) => clearAccountToken(...a),
   getAccountInfo: (...a: unknown[]) => getAccountInfo(...a),
-  openIn: vi.fn(),
+  openIn: (...a: unknown[]) => openIn(...a),
 }));
 
 vi.mock("../../../desktop", () => ({
   cancelOAuthServer: (...a: unknown[]) => cancelOAuthServer(...a),
   createDesktopStore: () => ({
-    get: vi.fn().mockResolvedValue(null),
-    set: (...a: unknown[]) => storeSet(...a),
+    get: async (key: string) => store.get(key) ?? null,
+    set: async (key: string, value: unknown) => {
+      store.set(key, value);
+      await storeSet(key, value);
+    },
+    delete: async (key: string) => {
+      store.delete(key);
+    },
   }),
   emit: (...a: unknown[]) => emit(...a),
-  invoke: vi.fn().mockResolvedValue("client-id"),
+  invoke: (...a: unknown[]) => invoke(...a),
   listen: (...a: unknown[]) => listen(...a),
   onOAuthUrl: (...a: unknown[]) => onOAuthUrl(...a),
   startOAuthServer: (...a: unknown[]) => startOAuthServer(...a),
 }));
 
 import AccountPage from "./AccountPage";
+import { codeChallengeS256 } from "../../../pkce";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  store.clear();
+  invoke.mockResolvedValue("client-id");
   getAccountInfo.mockResolvedValue(null);
   listen.mockResolvedValue(() => {});
   emit.mockResolvedValue(undefined);
@@ -133,6 +152,73 @@ describe("AccountPage", () => {
       await startLogin(4001);
 
       expect(cancelOAuthServer).toHaveBeenCalledExactlyOnceWith(4000);
+    });
+  });
+
+  describe("the OAuth redirect", () => {
+    async function startLogin() {
+      startOAuthServer.mockResolvedValue(4000);
+      render(<AccountPage />);
+      fireEvent.click(
+        await screen.findByRole("button", { name: /sign ?in ?with/i }),
+      );
+      await waitFor(() => expect(onOAuthUrl).toHaveBeenCalled());
+      const authUrl = new URL(openIn.mock.calls[0][0] as string);
+      const redirect = onOAuthUrl.mock.calls[0][0] as (
+        url: string,
+      ) => Promise<void>;
+      return { authUrl, redirect };
+    }
+
+    it("asks for S256 and sends the matching verifier when the code is exchanged", async () => {
+      const { authUrl, redirect } = await startLogin();
+      const verifier = store.get("oauthVerifier") as string;
+      const state = authUrl.searchParams.get("state");
+
+      expect(authUrl.searchParams.get("code_challenge_method")).toBe("S256");
+      expect(authUrl.searchParams.get("code_challenge")).toBe(
+        await codeChallengeS256(verifier),
+      );
+      expect(state).toBe(store.get("oauthState"));
+
+      await act(async () =>
+        redirect(`http://127.0.0.1:4000/?code=abc&state=${state}`),
+      );
+
+      expect(invoke).toHaveBeenCalledWith("oauth2_login", {
+        code: "abc",
+        redirectUri: "http://127.0.0.1:4000",
+        codeVerifier: verifier,
+      });
+    });
+
+    it("accepts a state once, so a replayed redirect is rejected", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { authUrl, redirect } = await startLogin();
+      const url = `http://127.0.0.1:4000/?code=abc&state=${authUrl.searchParams.get("state")}`;
+
+      await act(async () => redirect(url));
+      expect(store.has("oauthState")).toBe(false);
+      expect(store.has("oauthVerifier")).toBe(false);
+      await act(async () => redirect(url));
+
+      expect(
+        invoke.mock.calls.filter(([command]) => command === "oauth2_login"),
+      ).toHaveLength(1);
+    });
+
+    it("rejects a redirect carrying another state", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { redirect } = await startLogin();
+
+      await act(async () =>
+        redirect("http://127.0.0.1:4000/?code=abc&state=forged"),
+      );
+
+      expect(invoke).not.toHaveBeenCalledWith(
+        "oauth2_login",
+        expect.anything(),
+      );
     });
   });
 

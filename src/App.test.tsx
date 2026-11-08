@@ -10,6 +10,8 @@ const hosts = vi.hoisted(() => ({
   configGet: vi.fn(),
   configSet: vi.fn(),
   configSave: vi.fn(),
+  configDelete: vi.fn(),
+  invoke: vi.fn(),
   clearProgressBar: vi.fn(),
   setProgressBar: vi.fn(),
   getMod: vi.fn(),
@@ -24,6 +26,7 @@ vi.mock("./desktop", () => ({
     get: hosts.configGet,
     set: hosts.configSet,
     save: hosts.configSave,
+    delete: hosts.configDelete,
     onKeyChange: vi.fn(async () => () => {}),
     onChange: vi.fn(async () => () => {}),
   }),
@@ -36,7 +39,7 @@ vi.mock("./desktop", () => ({
     hide: vi.fn(),
   }),
   installUpdate: vi.fn(),
-  invoke: vi.fn(),
+  invoke: hosts.invoke,
   isProductionBuild: async () => false,
   listen: async (
     event: string,
@@ -148,6 +151,8 @@ beforeEach(() => {
   hosts.configGet.mockResolvedValue(undefined);
   hosts.configSet.mockResolvedValue(undefined);
   hosts.configSave.mockResolvedValue(undefined);
+  hosts.configDelete.mockResolvedValue(undefined);
+  hosts.invoke.mockResolvedValue(undefined);
   hosts.clearProgressBar.mockResolvedValue(undefined);
   hosts.setProgressBar.mockResolvedValue(undefined);
   Element.prototype.scrollTo = vi.fn();
@@ -240,6 +245,52 @@ describe("App deep links", () => {
     ).toBeInTheDocument();
   });
 
+  describe("sign-in redirect", () => {
+    // The sign-in start stores the state and PKCE verifier; the redirect
+    // consumes them.
+    function storeLogin(values: Record<string, string>) {
+      hosts.configGet.mockImplementation(async (key: string) => values[key]);
+      hosts.configDelete.mockImplementation(async (key: string) => {
+        delete values[key];
+      });
+    }
+
+    it("hands the stored verifier to the host and spends the state", async () => {
+      storeLogin({ oauthState: "st", oauthVerifier: "ver" });
+      await renderApp();
+
+      await open("quadrantnext://login?state=st&code=abc");
+
+      expect(hosts.invoke).toHaveBeenCalledExactlyOnceWith("oauth2_login", {
+        code: "abc",
+        redirectUri: "quadrantnext://login",
+        codeVerifier: "ver",
+      });
+      expect(hosts.configDelete).toHaveBeenCalledWith("oauthState");
+      expect(hosts.configDelete).toHaveBeenCalledWith("oauthVerifier");
+    });
+
+    it("rejects a replay of the same redirect", async () => {
+      storeLogin({ oauthState: "st", oauthVerifier: "ver" });
+      await renderApp();
+
+      await open("quadrantnext://login?state=st&code=abc");
+      await open("quadrantnext://login?state=st&code=abc");
+
+      expect(hosts.invoke).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a redirect whose state is not the one it started", async () => {
+      storeLogin({ oauthState: "st", oauthVerifier: "ver" });
+      await renderApp();
+
+      await open("quadrantnext://login?state=other&code=abc");
+
+      expect(hosts.invoke).not.toHaveBeenCalled();
+      expect(hosts.configDelete).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses a link whose id would reach another provider endpoint", async () => {
     await renderApp();
     await open("curseforge://install?addonId=1/files/2");
@@ -268,9 +319,11 @@ describe("App sync warnings", () => {
       unverifiedMods: [],
     });
 
-    expect(
-      await screen.findByText("An update to Survival needs your review"),
-    ).toBeVisible();
+    // The snackbar fades in, so it is not visible the moment it is found.
+    const message = await screen.findByText(
+      "An update to Survival needs your review",
+    );
+    await waitFor(() => expect(message).toBeVisible());
   });
 
   it("warns how many files of an applied update could not be verified", async () => {
@@ -287,11 +340,10 @@ describe("App sync warnings", () => {
       unverifiedMods: ["A", "B"],
     });
 
-    expect(
-      await screen.findByText(
-        "Survival was updated, but Quadrant couldn't verify 2 of its files.",
-      ),
-    ).toBeVisible();
+    const message = await screen.findByText(
+      "Survival was updated, but Quadrant couldn't verify 2 of its files.",
+    );
+    await waitFor(() => expect(message).toBeVisible());
   });
 });
 
