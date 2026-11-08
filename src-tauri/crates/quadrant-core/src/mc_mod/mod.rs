@@ -15,7 +15,7 @@ use crate::{
 
 #[cfg(test)]
 use cache::file_hash;
-use cache::{add_cache_index, copy_hashing, get_cache_index, sha512_hex};
+use cache::{copy_hashing, get_cache_index, sha512_hex};
 #[cfg(feature = "curseforge")]
 use curseforge::{
     download_mod_curseforge, get_latest_mod_version_curseforge, search_mods_curseforge,
@@ -717,13 +717,27 @@ pub async fn get_file(
         };
         match hashed {
             Ok((sha1, sha512)) if file.matches_hashes(&sha1, &sha512) => {
-                // Only refreshes the entry's last-used date: its file is there.
-                let file_path = add_cache_index(file.file_name.clone(), &[], sha1).await?;
-                event_sink.publish(BackendEvent::ModDownloadProgress(ModProgressPayload {
-                    mod_id: id,
-                    progress: 100,
-                }))?;
-                return Ok((file_path, file.download_url));
+                // The entry can lose its file, or point at another one, between
+                // the hash and the refresh. Only the file just hashed is used.
+                match cache::refresh_cache_entry(file.file_name.clone(), sha1).await {
+                    Ok(file_path) if file_path == cached_path => {
+                        event_sink.publish(BackendEvent::ModDownloadProgress(
+                            ModProgressPayload {
+                                mod_id: id,
+                                progress: 100,
+                            },
+                        ))?;
+                        return Ok((file_path, file.download_url));
+                    }
+                    Ok(_) => log::warn!(
+                        "Cache entry for sha1={} moved while it was read; re-downloading",
+                        file.sha1
+                    ),
+                    Err(error) => log::warn!(
+                        "Cache entry for sha1={} went away ({error}); re-downloading",
+                        file.sha1
+                    ),
+                }
             }
             Ok(_) => {
                 log::warn!("Discarding corrupt cache entry for sha1={}", file.sha1);

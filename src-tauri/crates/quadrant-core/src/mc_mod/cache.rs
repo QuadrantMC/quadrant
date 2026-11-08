@@ -212,6 +212,19 @@ pub(crate) async fn add_cache_file(
     result
 }
 
+/// Refreshes the last-used date of the entry for `file_hash` and returns its
+/// path. Fails with `NotFound`, writing nothing, when the file is gone by the
+/// time the index is locked, for example because another app pruned it.
+pub(crate) async fn refresh_cache_entry(
+    file_name: String,
+    file_hash: String,
+) -> Result<PathBuf, anyhow::Error> {
+    add_cache_entry(file_name, file_hash, |_| {
+        Err(std::io::ErrorKind::NotFound.into())
+    })
+    .await
+}
+
 /// A fresh path in the cache folder for a download to stream into, so
 /// [`add_cache_file`] can rename it into place.
 pub(crate) fn download_path() -> std::io::Result<PathBuf> {
@@ -508,6 +521,35 @@ pub(crate) mod tests {
 
         assert_eq!(again, path);
         assert_eq!(std::fs::read(&path).unwrap(), b"mod");
+    }
+
+    #[tokio::test]
+    async fn a_refresh_never_writes_a_file_that_went_away() {
+        let _guard = set_cache_dir();
+        let hash = file_hash(b"mod");
+        let path = add_cache_index("mod.jar".to_string(), b"mod", hash.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            super::refresh_cache_entry("mod.jar".to_string(), hash.clone())
+                .await
+                .unwrap(),
+            path
+        );
+
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            super::refresh_cache_entry("mod.jar".to_string(), hash)
+                .await
+                .is_err()
+        );
+        assert!(!path.exists());
+        assert!(
+            super::refresh_cache_entry("other.jar".to_string(), file_hash(b"other"))
+                .await
+                .is_err()
+        );
+        assert_eq!(super::read_index(&super::cache_dir()).len(), 1);
     }
 
     #[test]
