@@ -291,6 +291,7 @@ pub async fn get_mod_owners_modrinth(id: String) -> Result<Vec<String>> {
 }
 
 pub async fn get_mod_deps_modrinth(id: String) -> Result<Vec<Mod>> {
+    let id = check_provider_id(&id, false)?;
     let res_json: serde_json::Value = provider_cached_client()
         .get(format!(
             "{}/v2/project/{}/dependencies",

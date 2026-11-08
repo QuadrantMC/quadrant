@@ -304,14 +304,16 @@ pub struct IdentifiedMod {
 /// Checks a provider project or file id before it goes into a request path.
 /// Ids arrive from deep links and shared manifests, and `..` or a `/` in one
 /// would send the provider's API key to some other endpoint of its host.
-/// CurseForge ids are numbers; Modrinth ids and slugs are letters, digits,
-/// `-` and `_`.
+/// CurseForge ids are numbers; Modrinth ids and slugs use the characters of
+/// Modrinth's slug pattern, none of which ends a path segment.
 pub(crate) fn check_provider_id(id: &str, numeric: bool) -> Result<&str> {
     let valid = !id.is_empty()
         && id.len() <= 64
+        && (numeric || !matches!(id, "." | ".."))
         && id.bytes().all(|byte| {
             byte.is_ascii_digit()
-                || (!numeric && (byte.is_ascii_alphabetic() || byte == b'-' || byte == b'_'))
+                || (!numeric
+                    && (byte.is_ascii_alphabetic() || b"_-!@$()`.+,\"'".contains(&byte)))
         });
     if valid {
         Ok(id)
@@ -1934,6 +1936,9 @@ mod tests {
             ("AANobbMI", false),
             ("fabric-api", false),
             ("my_mod", false),
+            ("create.addon", false),
+            ("mod+(fork)", false),
+            ("...", false),
         ] {
             assert_eq!(check_provider_id(id, numeric).unwrap(), id);
         }
@@ -1944,14 +1949,37 @@ mod tests {
             ("12?x=1", true),
             ("abc", true),
             ("-1", true),
+            ("1.2", true),
+            (".", false),
             ("..", false),
             ("a/b", false),
+            ("a\\b", false),
+            ("a?b", false),
+            ("a#b", false),
             ("a%2fb", false),
             ("a b", false),
             (&"a".repeat(65), false),
         ] {
             assert!(check_provider_id(id, numeric).is_err(), "{id}");
         }
+    }
+
+    #[tokio::test]
+    async fn modrinth_dependencies_refuse_an_id_that_leaves_the_project_path() {
+        let _http = crate::mc_mod::http::PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        let server = httpmock::MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_MODRINTH_API_BASE", server.base_url());
+        }
+        let any = server.mock(|_, then| {
+            then.status(200).json_body(serde_json::json!({}));
+        });
+        let result = modrinth::get_mod_deps_modrinth("../../v2/search?x=".to_string()).await;
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");
+        }
+        assert!(result.is_err());
+        any.assert_calls(0);
     }
 
     fn partial_downloads() -> Vec<String> {
