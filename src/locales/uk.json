@@ -310,5 +310,8 @@
   "confirmDeleteSyncedModpack": "Видалити {{name}} з Quadrant Sync?",
   "confirmDeleteSyncedModpackText": "Хмарну копію буде назавжди видалено для всіх учасників. Копії, встановлені на комп'ютерах, залишаться.",
   "confirmKickMember": "Видалити {{username}}?",
-  "confirmKickMemberText": "{{username}} втратить доступ до {{name}} в Quadrant Sync."
+  "confirmKickMemberText": "{{username}} втратить доступ до {{name}} в Quadrant Sync.",
+  "errorBoundaryTitle": "Щось пішло не так",
+  "errorBoundaryText": "Quadrant зіткнувся з несподіваною помилкою. Зазвичай допомагає перезавантаження.",
+  "errorBoundaryReload": "Перезавантажити"
 }

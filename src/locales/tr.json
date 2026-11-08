@@ -304,5 +304,8 @@
   "confirmDeleteSyncedModpack": "{{name}}, Quadrant Sync'ten silinsin mi?",
   "confirmDeleteSyncedModpackText": "Bu işlem bulut kopyasını tüm üyeler için kalıcı olarak kaldırır. Bilgisayarlara kurulu kopyalar silinmez.",
   "confirmKickMember": "{{username}} çıkarılsın mı?",
-  "confirmKickMemberText": "{{username}}, Quadrant Sync'te {{name}} modpack'ine erişimini kaybedecek."
+  "confirmKickMemberText": "{{username}}, Quadrant Sync'te {{name}} modpack'ine erişimini kaybedecek.",
+  "errorBoundaryTitle": "Bir şeyler ters gitti",
+  "errorBoundaryText": "Quadrant beklenmedik bir hatayla karşılaştı. Yeniden yüklemek genellikle sorunu çözer.",
+  "errorBoundaryReload": "Yeniden yükle"
 }

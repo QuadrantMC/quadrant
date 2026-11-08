@@ -304,5 +304,8 @@
   "confirmDeleteSyncedModpack": "Delete {{name}} from Quadrant Sync?",
   "confirmDeleteSyncedModpackText": "This permanently removes the cloud copy for every member. Copies installed on computers are kept.",
   "confirmKickMember": "Remove {{username}}?",
-  "confirmKickMemberText": "{{username}} will lose access to {{name}} in Quadrant Sync."
+  "confirmKickMemberText": "{{username}} will lose access to {{name}} in Quadrant Sync.",
+  "errorBoundaryTitle": "Something went wrong",
+  "errorBoundaryText": "Quadrant hit an unexpected error. Reloading usually fixes it.",
+  "errorBoundaryReload": "Reload"
 }
