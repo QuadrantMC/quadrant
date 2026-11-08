@@ -28,6 +28,9 @@ pub const SYNCED_KEYS: &[&str] = &[
     "experimentalFeatures",
     "cacheKeepAlive",
     "clipIcons",
+    // Quadrant-Native's color theme. The desktop app keeps the key without
+    // reading it, so a theme picked on one machine follows the account.
+    "colorTheme",
 ];
 
 /// Outcome of a cloud settings pull.
@@ -259,6 +262,11 @@ mod tests {
         assert!(!SYNCED_KEYS.contains(&"hardwareId"));
         assert!(!SYNCED_KEYS.contains(&"curseforgeUsage"));
         assert!(!SYNCED_KEYS.contains(&"modrinthUsage"));
+    }
+
+    #[test]
+    fn the_native_color_theme_is_cloud_synced() {
+        assert!(SYNCED_KEYS.contains(&"colorTheme"));
     }
 
     #[tokio::test]
