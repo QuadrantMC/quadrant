@@ -92,6 +92,45 @@ describe("ModpackView", () => {
       "sodium",
     ]);
   });
+  it("caps concurrent provider requests and does not refetch when Identify is toggled", async () => {
+    let running = 0;
+    let peak = 0;
+    getMod.mockImplementation(async (args: { id: string }) => {
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      running--;
+      return fetched(args.id);
+    });
+    const mods = Array.from({ length: 20 }, (_, i) => ({
+      id: `mod${i}`,
+      downloadUrl: "",
+      source: ModSource.Modrinth,
+    }));
+    render(
+      <ModpackView
+        name="Pack"
+        version="1.20.1"
+        modLoader={ModLoader.Fabric}
+        isApplied={false}
+        lastSynced={0}
+        unknownMods={true}
+        mods={mods}
+      />,
+    );
+    await waitFor(() => expect(screen.getAllByTestId("mod")).toHaveLength(20));
+    expect(peak).toBeLessThanOrEqual(6);
+    expect(getMod).toHaveBeenCalledTimes(20);
+
+    await userEvent.click(screen.getByRole("button", { name: /identify/i }));
+    await userEvent.click(screen.getByRole("button", { name: /identify/i }));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(getMod).toHaveBeenCalledTimes(20);
+    expect(screen.getAllByTestId("mod")).toHaveLength(20);
+  });
+
   it("offers a back button that uses the live content context", async () => {
     const staleBack = vi.fn();
     const back = vi.fn();

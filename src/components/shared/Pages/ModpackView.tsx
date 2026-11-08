@@ -10,7 +10,8 @@ import {
   ModSource,
   ModType,
 } from "../../../intefaces";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
+import { mapLimit } from "../../../mapLimit";
 import { getMod, getModUpdate, identifyUnknownMods } from "../../../tools";
 import Mod from "../Mod";
 import { useTranslation } from "react-i18next";
@@ -25,6 +26,35 @@ type ModpackViewProps = LocalModpack & {
   showBack?: boolean;
 };
 
+const PLACEHOLDER_MOD: IMod = {
+  autoinstallable: false,
+  deleteable: false,
+  description: "-",
+  downloadCount: 0,
+  id: "-",
+  modIconUrl:
+    "https://github.com/QuadrantMC/quadrant/raw/next/public/logo.svg",
+  downloadable: false,
+  name: "-",
+  source: ModSource.Online,
+  thumbnailUrls: [],
+  url: "",
+  modType: ModType.Mod,
+  license: "-",
+  showPreviousVersion: false,
+  slug: "-",
+  version: "",
+  dateModified: "",
+  newVersion: null,
+  modpack: "",
+  selectable: false,
+  selectUrl: null,
+};
+
+// Provider requests in flight at once; a big pack would otherwise fire one per
+// mod and trip the providers' rate limits.
+const FETCH_CONCURRENCY = 6;
+
 export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) {
   const context = useContext(ContentContext);
   const localMods = modpack.mods;
@@ -33,48 +63,20 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
   const [toIdentify, setToIdentify] = useState<FetchedIdentifiedMod[]>([]);
   const [showUpdates, setShowUpdates] = useState(false);
   const [showIdentify, setShowIdentify] = useState(false);
-  const [modCount, setModCount] = useState(mods.length);
-  const placeholderMod: IMod = {
-    autoinstallable: false,
-    deleteable: false,
-    description: "-",
-    downloadCount: 0,
-    id: "-",
-    modIconUrl:
-      "https://github.com/QuadrantMC/quadrant/raw/next/public/logo.svg",
-    downloadable: false,
-    name: "-",
-    source: ModSource.Online,
-    thumbnailUrls: [],
-    url: "",
-    modType: ModType.Mod,
-    license: "-",
-    showPreviousVersion: false,
-    slug: "-",
-    version: "",
-    dateModified: "",
-    newVersion: null,
-    modpack: "",
-    selectable: false,
-    selectUrl: null,
-  };
-
-  const updateModpackDetails = async (isCancelled: () => boolean) => {
-    setMods([]);
-    if (!showUpdates) {
-      setModCount(0);
-    }
-    if (showIdentify) {
-      await getIdentifiedMods();
-    }
-
+  const updatesRequest = useRef(0);
+  const loadMods = async (isCancelled: () => boolean) => {
     if (!localMods || localMods.length === 0) {
-      setMods([placeholderMod]);
+      setMods([PLACEHOLDER_MOD]);
       return;
     }
 
-    const fetchedMods = await Promise.all(
-      localMods.map(async (mod) => {
+    const fetchedMods = await mapLimit(
+      localMods,
+      FETCH_CONCURRENCY,
+      async (mod) => {
+        if (isCancelled()) {
+          return null;
+        }
         try {
           return await getMod(
             {
@@ -94,7 +96,7 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
           console.error("Failed to retrieve mod:", error);
           return null;
         }
-      }),
+      },
     );
 
     if (isCancelled()) {
@@ -103,39 +105,41 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
     const validMods = fetchedMods.filter((mod): mod is IMod => mod !== null);
 
     if (validMods.length === 0) {
-      setMods([placeholderMod]);
-      if (!showUpdates) {
-        setModCount(0);
-      }
+      setMods([PLACEHOLDER_MOD]);
       return;
     }
 
     validMods.sort((a, b) => b.downloadCount - a.downloadCount);
     setMods(validMods);
-    if (!showUpdates) {
-      setModCount(validMods.length);
-    }
   };
 
   const checkForUpdates = async () => {
+    const request = ++updatesRequest.current;
     setUpdates([]);
     const normalMods: IMod[] = JSON.parse(JSON.stringify(mods));
-    const fetchedUpdates = await Promise.all(
-      normalMods.map(async (mod) => {
+    const fetchedUpdates = await mapLimit(
+      normalMods,
+      FETCH_CONCURRENCY,
+      async (mod) => {
+        if (request !== updatesRequest.current) {
+          return null;
+        }
         try {
-          const update = await getModUpdate(
+          return await getModUpdate(
             mod,
             modpack.version,
             modpack.modLoader,
             modpack.name,
           );
-          return update;
         } catch (e) {
-          console.log("Error while checking for updates: " + e);
+          console.error("Error while checking for updates: " + e);
           return null;
         }
-      }),
+      },
     );
+    if (request !== updatesRequest.current) {
+      return;
+    }
 
     const newUpdates = fetchedUpdates.filter(
       (update): update is IMod => update !== null,
@@ -145,72 +149,46 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
     setUpdates(newUpdates);
     if (newUpdates.length === 0) {
       setShowUpdates(false);
-      setModCount(mods.length);
-    } else {
-      const downloadableCount = newUpdates.filter(
-        (mod) => mod.downloadable === true,
-      ).length;
-      setModCount(downloadableCount);
     }
   };
 
-  const getIdentifiedMods = async () => {
-    console.log("Getting mods");
+  const getIdentifiedMods = async (isCancelled: () => boolean) => {
     const newMods = await identifyUnknownMods(modpack.name);
     const newFetchedMods: FetchedIdentifiedMod[] = [];
-    console.log("New mods: " + newMods);
     for (const mod of newMods) {
-      console.log(mod);
-      if (
-        newFetchedMods.filter(
-          (fetchedMod) => fetchedMod.fileName === mod.file_name,
-        ).length === 0
-      ) {
-        console.log("Adding a new mod from source.");
+      if (isCancelled()) {
+        return;
+      }
+      const proposed = await getMod(
+        {
+          deletable: false,
+          id: mod.installed_mod.id,
+          downloadable: false,
+          showPreviousVersion: false,
+          versionTarget: "",
+          selectable: true,
+          selectUrl: mod.installed_mod.downloadUrl,
+          modLoader: modpack.modLoader,
+          modpack: modpack.name,
+        },
+        mod.installed_mod.source,
+      );
+      const existing = newFetchedMods.find(
+        (fetched) => fetched.fileName === mod.file_name,
+      );
+      if (existing) {
+        existing.proposedMods.push(proposed);
+      } else {
         newFetchedMods.push({
-          proposedMods: [
-            await getMod(
-              {
-                deletable: false,
-                id: mod.installed_mod.id,
-                downloadable: false,
-                showPreviousVersion: false,
-                versionTarget: "",
-                selectable: true,
-                selectUrl: mod.installed_mod.downloadUrl,
-                modLoader: modpack.modLoader,
-                modpack: modpack.name,
-              },
-              mod.installed_mod.source,
-            ),
-          ],
+          proposedMods: [proposed],
           fileName: mod.file_name,
         });
-      } else {
-        console.log("Adding mod from an alternate source.");
-        const index = newFetchedMods.findIndex(
-          (fMod) => fMod.fileName === mod.file_name,
-        );
-        newFetchedMods[index].proposedMods.push(
-          await getMod(
-            {
-              deletable: false,
-              id: mod.installed_mod.id,
-              downloadable: false,
-              showPreviousVersion: false,
-              versionTarget: "",
-              selectable: true,
-              selectUrl: mod.installed_mod.downloadUrl,
-              modLoader: modpack.modLoader,
-              modpack: modpack.name,
-            },
-            mod.installed_mod.source,
-          ),
-        );
       }
     }
+    if (isCancelled()) {
+      return;
+    }
     if (newFetchedMods.length === 0) {
-      setToIdentify([]);
       setShowIdentify(false);
     }
     setToIdentify(newFetchedMods);
@@ -223,21 +201,42 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
   const modsSignature = (localMods ?? [])
     .map((mod) => `${mod.source}:${mod.id}`)
     .join(",");
-  // A single effect covers mount and toggle changes. A separate mount-only
-  // effect used to run alongside it, fetching every mod twice on open.
+  // Toggling Update or Identify only changes which view is shown, so these
+  // effects must not depend on those flags: that refetched every mod.
   useEffect(() => {
     let cancelled = false;
-    if (showIdentify === false) {
-      setToIdentify([]);
-    }
-    if (showUpdates === false) {
-      setUpdates([]);
-    }
-    updateModpackDetails(() => cancelled).catch((e) => console.error(e));
+    setMods([]);
+    loadMods(() => cancelled).catch((e) => console.error(e));
     return () => {
       cancelled = true;
     };
-  }, [modpack.name, modsSignature, showIdentify, showUpdates]);
+  }, [modpack.name, modsSignature]);
+
+  useEffect(() => {
+    if (!showIdentify) {
+      setToIdentify([]);
+      return;
+    }
+    let cancelled = false;
+    getIdentifiedMods(() => cancelled).catch((e) => console.error(e));
+    return () => {
+      cancelled = true;
+    };
+  }, [modpack.name, showIdentify]);
+
+  useEffect(() => {
+    if (!showUpdates) {
+      updatesRequest.current++;
+      setUpdates([]);
+    }
+  }, [showUpdates]);
+
+  const modCount =
+    showUpdates && updates.length > 0
+      ? updates.filter((mod) => mod.downloadable === true).length
+      : mods.length === 1 && mods[0] === PLACEHOLDER_MOD
+        ? 0
+        : mods.length;
 
   return (
     <div className="w-auto p-4 rounded-4xl flex flex-1 flex-col">
