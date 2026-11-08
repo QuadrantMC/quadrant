@@ -377,6 +377,33 @@ pub(crate) fn is_single_path_component(name: &str) -> bool {
         && components.next().is_none()
 }
 
+/// Whether `name` can be created as a file or folder on every platform without
+/// aliasing another one. Windows strips a trailing dot or space (`Survival.`
+/// opens `Survival`), maps reserved device stems (`NUL.jar`) to devices, and
+/// reads `x.jar:s` as an alternate data stream.
+pub(crate) fn is_portable_file_name(name: &str) -> bool {
+    if !is_single_path_component(name) || name.len() > 255 {
+        return false;
+    }
+    if name.ends_with(['.', ' '])
+        || name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\\'))
+    {
+        return false;
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end()
+        .to_ascii_uppercase();
+    let numbered_device = stem.len() == 4
+        && (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.as_bytes()[3].is_ascii_digit();
+    !numbered_device && !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -725,6 +752,39 @@ mod tests {
         assert_eq!(local.last_synced, 7);
         assert_eq!(local.modpack_id, None);
         assert!(!local.unknown_mods);
+    }
+
+    #[test]
+    fn portable_file_names_reject_names_windows_would_alias() {
+        for name in [
+            "Survival",
+            "my mod v1.2.jar",
+            "пак",
+            "pack.v2",
+            "COM",
+            "console.jar",
+        ] {
+            assert!(is_portable_file_name(name), "{name:?}");
+        }
+        for name in [
+            "",
+            "..",
+            "a/b",
+            "a\\b",
+            "Survival.",
+            "Survival ",
+            "x.jar:s",
+            "what?",
+            "tab\there",
+            "NUL",
+            "nul.jar",
+            "Con .txt",
+            "COM1",
+            "lpt9.zip",
+            &"a".repeat(256),
+        ] {
+            assert!(!is_portable_file_name(name), "{name:?}");
+        }
     }
 
     #[test]

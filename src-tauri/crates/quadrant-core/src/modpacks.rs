@@ -6,7 +6,7 @@ use crate::{
     mc_mod::enrich_installed_mod,
     models::{
         InstalledMod, InstalledModpack, LocalModpack, ModLoader, ModSource, SyncInfo,
-        is_single_path_component, modpack_path,
+        is_portable_file_name, is_single_path_component, modpack_path,
     },
     ports::{EventSink, SettingsStore},
 };
@@ -16,7 +16,7 @@ use futures::StreamExt;
 use std::{
     collections::HashSet,
     io::Write,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::Arc,
 };
 use tokio::sync::Mutex;
@@ -77,6 +77,17 @@ pub(crate) fn validate_modpack_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// The stricter check for a name that is about to become a folder, so a new
+/// or incoming pack can never alias an existing one.
+pub(crate) fn validate_new_modpack_name(name: &str) -> Result<()> {
+    if !is_portable_file_name(name) {
+        return Err(anyhow::Error::from(
+            crate::error::ErrorCode::InvalidModpackName,
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn safe_download_file_name(download_url: &str, source: &ModSource) -> Result<String> {
     let url = reqwest::Url::parse(download_url)?;
     let scheme_allowed = url.scheme() == "https"
@@ -104,13 +115,7 @@ pub(crate) fn safe_download_file_name(download_url: &str, source: &ModSource) ->
         .and_then(|segments| segments.filter(|part| !part.is_empty()).next_back())
         .ok_or_else(|| anyhow::Error::from(crate::error::ErrorCode::UnsafeDownload))?;
     let decoded = urlencoding::decode(encoded)?.into_owned();
-    let mut components = Path::new(&decoded).components();
-    if decoded.is_empty()
-        || !matches!(components.next(), Some(Component::Normal(_)))
-        || components.next().is_some()
-        || decoded == "."
-        || decoded == ".."
-    {
+    if !is_portable_file_name(&decoded) {
         return Err(anyhow::Error::from(crate::error::ErrorCode::UnsafeDownload));
     }
     Ok(decoded)
@@ -396,7 +401,7 @@ pub fn create_modpack(
     version: &str,
     mod_loader: ModLoader,
 ) -> Result<()> {
-    validate_modpack_name(name)?;
+    validate_new_modpack_name(name)?;
     log::info!("Creating modpack \"{name}\" (version={version}, mod_loader={mod_loader:?})");
     if existing_modpacks.iter().any(|modpack| modpack.name == name) {
         return Err(anyhow::Error::from(crate::error::ErrorCode::ModpackExists));
@@ -438,7 +443,7 @@ pub fn update_modpack(
 ) -> Result<LocalModpack> {
     validate_modpack_name(modpack_source)?;
     if let Some(name) = name.as_deref() {
-        validate_modpack_name(name)?;
+        validate_new_modpack_name(name)?;
     }
     log::info!(
         "Updating modpack \"{modpack_source}\" (name={name:?}, version={version:?}, mod_loader={mod_loader:?})"
@@ -455,7 +460,13 @@ pub fn update_modpack(
         && name != modpack_source
     {
         let destination = modpack_path(mc_folder, name);
-        if destination.try_exists()? || destination.is_symlink() {
+        // A case-only rename on a case-insensitive file system finds the pack
+        // itself at the destination.
+        let is_same_folder = matches!(
+            (destination.canonicalize(), modpack_folder.canonicalize()),
+            (Ok(destination), Ok(source)) if destination == source
+        );
+        if !is_same_folder && (destination.try_exists()? || destination.is_symlink()) {
             return Err(anyhow::Error::from(crate::error::ErrorCode::ModpackExists));
         }
     }
@@ -649,7 +660,7 @@ pub async fn install_modpack(
     settings: &impl SettingsStore,
     event_sink: &impl EventSink,
 ) -> Result<()> {
-    validate_modpack_name(&mod_config.name)?;
+    validate_new_modpack_name(&mod_config.name)?;
     log::info!(
         "Installing modpack \"{}\" ({} mod(s))",
         mod_config.name,
@@ -663,9 +674,10 @@ pub async fn install_modpack(
         .iter()
         .map(|mod_| safe_download_file_name(&mod_.download_url, &mod_.source))
         .collect::<Result<Vec<_>>>()?;
+    // Case-insensitive file systems would download both into one file.
     let mut unique_file_names = HashSet::new();
     for name in &expected_file_names {
-        if !unique_file_names.insert(name) {
+        if !unique_file_names.insert(name.to_lowercase()) {
             return Err(anyhow!("Duplicate download file name: {name}"));
         }
     }
@@ -1196,6 +1208,90 @@ mod tests {
                 .contains("Duplicate download file name")
         );
         assert!(!modpack_path(&mc_folder, "alpha").exists());
+    }
+
+    #[tokio::test]
+    async fn install_modpack_rejects_names_that_alias_another_pack_or_file() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        create_modpack(&mc_folder, &[], "Survival", "1.20.1", ModLoader::Fabric).unwrap();
+        let manifest = modpack_path(&mc_folder, "Survival").join("modConfigV2.json");
+        let original = std::fs::read(&manifest).unwrap();
+        let pack = |name: &str, mods: Vec<InstalledMod>| InstalledModpack {
+            mod_config_version: "2".to_string(),
+            quadrant_version: String::new(),
+            name: name.to_string(),
+            version: "1.20.1".to_string(),
+            mod_loader: ModLoader::Fabric,
+            mods,
+        };
+        let install = |pack: InstalledModpack| {
+            let mc_folder = mc_folder.clone();
+            async move {
+                install_modpack(
+                    &mc_folder,
+                    pack,
+                    &MemoryStore::default(),
+                    &CollectingEvents::default(),
+                )
+                .await
+            }
+        };
+
+        for name in ["Survival.", "Survival ", "NUL"] {
+            assert!(install(pack(name, Vec::new())).await.is_err(), "{name:?}");
+        }
+        for url in [
+            "https://example.invalid/NUL.jar",
+            "https://example.invalid/x.jar:s",
+        ] {
+            let mods = vec![online_mod("one", url.to_string())];
+            assert!(install(pack("Survival", mods)).await.is_err(), "{url}");
+        }
+        let mods = vec![
+            online_mod("one", "https://example.invalid/one/Sodium.jar".to_string()),
+            online_mod("two", "https://example.invalid/two/sodium.jar".to_string()),
+        ];
+        let error = install(pack("Survival", mods)).await.unwrap_err();
+        assert!(error.to_string().contains("Duplicate download file name"));
+        assert_eq!(std::fs::read(&manifest).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn update_modpack_renames_a_pack_by_case_only() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        create_modpack(&mc_folder, &[], "alpha", "1.20.1", ModLoader::Fabric).unwrap();
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+
+        let renamed = update_modpack(
+            &mc_folder,
+            &listed,
+            "alpha",
+            Some("Alpha".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(renamed.name, "Alpha");
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|pack| pack.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Alpha"]
+        );
+        assert!(
+            update_modpack(
+                &mc_folder,
+                &listed,
+                "Alpha",
+                Some("Alpha.".to_string()),
+                None,
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]
