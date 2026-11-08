@@ -49,6 +49,14 @@
 
   <releases>
 
+    <release date="2026-11-08" version="26.11.2">
+      <description>
+        <p>Modpacks record a file hash for every mod, existing modpacks get theirs on first launch, and Quadrant warns before installing files it can't verify</p>
+        <p>Automatic sync no longer installs mods from arbitrary websites without asking</p>
+        <p>Security, reliability and performance fixes across sign-in, sync, sharing and downloads</p>
+      </description>
+    </release>
+
     <release date="2026-11-07" version="26.11.1">
       <description>
         <p>New GPUI Preview and GPUI Experimental update channels, which switch to Quadrant-Native</p>
