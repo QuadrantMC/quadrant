@@ -232,3 +232,39 @@ describe("parseShareCode", () => {
     expect(parseShareCode("not a url")).toBeNull();
   });
 });
+
+describe("resolveDeepLink — provider ids", () => {
+  it.each([
+    "curseforge://install?addonId=123/files/456",
+    "curseforge://install?addonId=1%3Fx%3D",
+    "curseforge://install?addonId=abc",
+    "curseforge://install?addonId=1&fileId=2/3",
+    "curseforge://install?addonId=1&fileId=latest",
+    "quadrantnext://curseforge?addonId=1&fileId=..%2F2",
+    "quadrantnext://modrinth?modId=sodium%2F..%2Fother",
+    "quadrantnext://modrinth?modId=sodium%3Fq%3D1",
+    "quadrantnext://modrinth?modId=..",
+    "quadrantnext://modrinth?modId=sodium&fileId=a/b",
+    "modrinth://mod/sodium%2Fversions",
+  ])("rejects %s", (link) => {
+    expect(resolveDeepLink(link)).toEqual({ kind: "unsupported" });
+  });
+
+  it("keeps the ids the providers really use", () => {
+    expect(resolveDeepLink("modrinth://mod/AANobbMI")).toMatchObject({
+      modId: "AANobbMI",
+    });
+    expect(resolveDeepLink("modrinth://mod/fabric-api")).toMatchObject({
+      modId: "fabric-api",
+    });
+    expect(
+      resolveDeepLink("quadrantnext://modrinth?modId=sodium&fileId=u1sQ4GfL"),
+    ).toMatchObject({ modId: "sodium", fileId: "u1sQ4GfL" });
+  });
+
+  it("treats an empty file id as none", () => {
+    expect(
+      resolveDeepLink("curseforge://install?addonId=1&fileId="),
+    ).toMatchObject({ kind: "installMod", fileId: undefined });
+  });
+});

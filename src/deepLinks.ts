@@ -84,6 +84,38 @@ export type DeepLinkAction =
   /** Not a Quadrant link: skip silently and keep processing. */
   | { kind: "none" };
 
+// Ids are spliced into provider API paths by the backend, so a link must not
+// be able to smuggle a path segment or a query in through them.
+const CURSEFORGE_ID = /^\d{1,12}$/;
+const MODRINTH_PROJECT = /^[\w!@$()`.+,"\-']{1,64}$/;
+const MODRINTH_VERSION = /^[A-Za-z0-9]{1,64}$/;
+
+function installLink(
+  source: ModSource,
+  modId: string,
+  rawFileId: string | null,
+  stopAfter: boolean,
+): DeepLinkAction {
+  const fileId = rawFileId?.trim() || null;
+  const curseForge = source === ModSource.CurseForge;
+  const validMod = curseForge
+    ? CURSEFORGE_ID.test(modId)
+    : MODRINTH_PROJECT.test(modId) && !/^\.+$/.test(modId);
+  const validFile =
+    fileId === null ||
+    (curseForge ? CURSEFORGE_ID : MODRINTH_VERSION).test(fileId);
+  if (!validMod || !validFile) {
+    return { kind: "unsupported" };
+  }
+  return {
+    kind: "installMod",
+    source,
+    modId,
+    fileId: fileId ?? undefined,
+    stopAfter,
+  };
+}
+
 /**
  * Classifies a deep-link URL into the action the app should take.
  * Throws if `rawUrl` is not a valid URL (matching `new URL`).
@@ -99,13 +131,12 @@ export function resolveDeepLink(rawUrl: string): DeepLinkAction {
       if (action !== "install" || !modId) {
         return { kind: "unsupported" };
       }
-      return {
-        kind: "installMod",
-        source: ModSource.CurseForge,
+      return installLink(
+        ModSource.CurseForge,
         modId,
-        fileId: url.searchParams.get("fileId") ?? undefined,
-        stopAfter: false,
-      };
+        url.searchParams.get("fileId"),
+        false,
+      );
     }
 
     case "modrinth:": {
@@ -125,12 +156,7 @@ export function resolveDeepLink(rawUrl: string): DeepLinkAction {
       ) {
         return { kind: "unsupported" };
       }
-      return {
-        kind: "installMod",
-        source: ModSource.Modrinth,
-        modId,
-        stopAfter: true,
-      };
+      return installLink(ModSource.Modrinth, modId, null, true);
     }
 
     case "quadrantnext:": {
@@ -151,16 +177,14 @@ export function resolveDeepLink(rawUrl: string): DeepLinkAction {
         if (!modId) {
           return { kind: "unsupported" };
         }
-        return {
-          kind: "installMod",
-          source:
-            quadrantAction === "modrinth"
-              ? ModSource.Modrinth
-              : ModSource.CurseForge,
+        return installLink(
+          quadrantAction === "modrinth"
+            ? ModSource.Modrinth
+            : ModSource.CurseForge,
           modId,
-          fileId: url.searchParams.get("fileId") ?? undefined,
-          stopAfter: true,
-        };
+          url.searchParams.get("fileId"),
+          true,
+        );
       }
 
       if (quadrantAction === "modpack") {
