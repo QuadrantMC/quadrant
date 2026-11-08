@@ -1783,12 +1783,14 @@ impl QuadrantHost {
     }
 
     async fn notification_worker_loop(&self) {
+        let mut reconnect_attempt = 0;
         loop {
             if let Err(error) = self.bootstrap_notifications().await {
                 log::error!("Notification bootstrap failed: {error}");
             }
 
-            if let Err(error) = self.run_notification_socket().await {
+            let mut connected_for = None;
+            if let Err(error) = self.run_notification_socket(&mut connected_for).await {
                 log::warn!("Notification socket cycle ended: {error}");
             }
 
@@ -1796,13 +1798,8 @@ impl QuadrantHost {
                 log::warn!("Notification catch-up failed after socket cycle: {error}");
             }
 
-            let delay = {
-                let mut state = self.inner.runtime_state.lock().await;
-                state.notification_state.reconnect_attempt =
-                    state.notification_state.reconnect_attempt.saturating_add(1);
-                reconnect_delay(state.notification_state.reconnect_attempt)
-            };
-            tokio::time::sleep(delay).await;
+            reconnect_attempt = next_reconnect_attempt(reconnect_attempt, connected_for);
+            tokio::time::sleep(reconnect_delay(reconnect_attempt)).await;
         }
     }
 
@@ -1903,11 +1900,12 @@ impl QuadrantHost {
             }
         }
 
-        self.set_reconnect_attempt(0).await;
         Ok(())
     }
 
-    async fn run_notification_socket(&self) -> Result<()> {
+    /// Runs one socket connection until it fails, recording in `connected_for`
+    /// how long it stayed open once the handshake succeeded.
+    async fn run_notification_socket(&self, connected_for: &mut Option<Duration>) -> Result<()> {
         let token = quadrant_core::account::get_account_token(&self.inner.secret_store)?;
         let (cursor, connection_id) = {
             let state = self.inner.runtime_state.lock().await;
@@ -1929,8 +1927,18 @@ impl QuadrantHost {
         let (mut socket, _) = tokio::time::timeout(WS_CONNECT_TIMEOUT, connect_async(request))
             .await
             .map_err(|_| anyhow!("notification websocket connect timed out"))??;
-        self.set_reconnect_attempt(0).await;
+        let connected_at = tokio::time::Instant::now();
+        let result = self.read_notification_frames(&mut socket).await;
+        *connected_for = Some(connected_at.elapsed());
+        result
+    }
 
+    async fn read_notification_frames(
+        &self,
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> Result<()> {
         loop {
             let frame = match tokio::time::timeout(WS_READ_TIMEOUT, socket.next()).await {
                 Ok(Some(frame)) => frame?,
@@ -2217,11 +2225,6 @@ impl QuadrantHost {
             .then(|| state.notification_state.notifications_for_ui())
     }
 
-    async fn set_reconnect_attempt(&self, attempt: u32) {
-        let mut state = self.inner.runtime_state.lock().await;
-        state.notification_state.reconnect_attempt = attempt;
-    }
-
     async fn mark_modpack_sync_processed(&self, notification: &Notification) {
         let mut state = self.inner.runtime_state.lock().await;
         state
@@ -2274,7 +2277,6 @@ struct NotificationRuntimeState {
     ordered_keys: Vec<String>,
     processed_modpack_sync_by_key: HashMap<String, String>,
     cursor: NotificationCursor,
-    reconnect_attempt: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2465,6 +2467,19 @@ fn merge_notifications_and_collect_updates(
             .filter_map(|identity_key| latest_modpack_sync_by_key.remove(&identity_key))
             .collect(),
         membership_modpack_ids,
+    }
+}
+
+/// A connection that stayed open this long was healthy, so the next drop is
+/// retried quickly again. One the server accepts and then drops at once keeps
+/// backing off instead of being retried every second.
+const WS_STABLE_CONNECTION: Duration = Duration::from_secs(30);
+
+fn next_reconnect_attempt(previous: u32, connected_for: Option<Duration>) -> u32 {
+    if connected_for.is_some_and(|uptime| uptime >= WS_STABLE_CONNECTION) {
+        1
+    } else {
+        previous.saturating_add(1)
     }
 }
 
@@ -2817,6 +2832,22 @@ mod tests {
         path::{Path, PathBuf},
     };
     use tempfile::tempdir;
+
+    #[test]
+    fn reconnects_back_off_until_a_connection_stays_up() {
+        use super::{next_reconnect_attempt, reconnect_delay};
+        use std::time::Duration;
+
+        let mut attempt = 0;
+        for _ in 0..6 {
+            attempt = next_reconnect_attempt(attempt, Some(Duration::from_secs(1)));
+        }
+        assert_eq!(reconnect_delay(attempt), Duration::from_secs(60));
+        assert_eq!(next_reconnect_attempt(attempt, None), 7);
+
+        attempt = next_reconnect_attempt(attempt, Some(Duration::from_secs(45)));
+        assert_eq!(reconnect_delay(attempt), Duration::from_secs(1));
+    }
 
     fn notification(id: &str, unix: i64, read: bool) -> Notification {
         Notification {
