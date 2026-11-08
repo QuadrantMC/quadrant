@@ -284,13 +284,15 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
               )}
             </p>
             <Button
-              onClick={async () => {
+              onClick={() => {
                 if (showUpdates) {
                   setShowUpdates(false);
                   return;
                 }
                 setShowUpdates(true);
-                await checkForUpdates();
+                // Not awaited: a pending button ignores clicks, and the user
+                // must be able to hide the view while the checks still run.
+                checkForUpdates().catch(console.error);
               }}
               className="bg-blue-600 hover:bg-blue-700 ml-4 w-fit px-4 flex items-center "
             >

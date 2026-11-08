@@ -13,10 +13,11 @@ import {
 
 const getMod = vi.fn();
 const identifyUnknownMods = vi.fn();
+const getModUpdate = vi.fn();
 
 vi.mock("../../../tools", () => ({
   getMod: (...a: unknown[]) => getMod(...a),
-  getModUpdate: vi.fn(),
+  getModUpdate: (...a: unknown[]) => getModUpdate(...a),
   identifyUnknownMods: (...a: unknown[]) => identifyUnknownMods(...a),
 }));
 
@@ -129,6 +130,34 @@ describe("ModpackView", () => {
     });
     expect(getMod).toHaveBeenCalledTimes(20);
     expect(screen.getAllByTestId("mod")).toHaveLength(20);
+  });
+
+  it("lets the user hide the update view while the checks still run", async () => {
+    let finishCheck!: () => void;
+    getModUpdate.mockReturnValue(
+      new Promise((resolve) => {
+        finishCheck = () => resolve(null);
+      }),
+    );
+    render(
+      <ModpackView
+        name="Pack"
+        version="1.20.1"
+        modLoader={ModLoader.Fabric}
+        isApplied={false}
+        lastSynced={0}
+        unknownMods={false}
+        mods={[{ id: "sodium", downloadUrl: "", source: ModSource.Modrinth }]}
+      />,
+    );
+    await screen.findByTestId("mod");
+
+    const button = screen.getByRole("button", { name: /update/i });
+    await userEvent.click(button);
+    await waitFor(() => expect(getModUpdate).toHaveBeenCalled());
+
+    expect(button).toBeEnabled();
+    finishCheck();
   });
 
   it("offers a back button that uses the live content context", async () => {
