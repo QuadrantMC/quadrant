@@ -145,6 +145,7 @@ fn reveal(app: &tauri::AppHandle, links: &[String]) {
             .handle_cli_arguments(["quadrant", link.as_str()].into_iter());
     }
 }
+
 // Compile-time credentials are embedded only by the features that call the
 // Quadrant backend with them, so `--no-default-features` builds need none.
 #[cfg(feature = "quadrant_id")]
