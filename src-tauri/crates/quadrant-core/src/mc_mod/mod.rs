@@ -1,13 +1,9 @@
 //! Mod provider integration, install flows, and mod identification APIs.
 
-use std::{
-    path::{Component, Path, PathBuf},
-    sync::Mutex,
-};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::anyhow;
 use futures::StreamExt;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -24,8 +20,6 @@ use curseforge::{
 };
 use http::{provider_cached_client, provider_http_client};
 use modrinth::{download_mod_modrinth, get_latest_mod_version_modrinth, search_mods_modrinth};
-
-pub(crate) static MODPACK_MANIFEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 pub mod cache;
 #[cfg(feature = "curseforge")]
@@ -794,28 +788,19 @@ pub fn install_local_file(
     let target_file_name = download_file_name(&local_mod.download_url)
         .filter(|name| crate::models::is_portable_file_name(name))
         .ok_or_else(|| anyhow::Error::from(crate::error::ErrorCode::UnsafeDownload))?;
-    let _manifest_guard = if mod_type == ModType::Mod {
-        Some(
-            MODPACK_MANIFEST_LOCK
-                .lock()
-                .map_err(|_| anyhow!("Modpack manifest lock poisoned"))?,
-        )
+    let _manifest_lock = if mod_type == ModType::Mod {
+        Some(crate::modpacks::lock_manifests(mc_folder)?)
     } else {
         None
     };
 
-    let (target_path, mut updated_modpack, manifest_path, old_file_paths) = match mod_type {
+    let (target_path, mut updated_modpack, manifest_folder, old_file_paths) = match mod_type {
         ModType::Mod => {
             let modpack_name = modpack.ok_or_else(|| anyhow!("modpackRequired"))?;
             crate::modpacks::validate_modpack_name(&modpack_name)?;
-            let manifest_path =
-                crate::models::modpack_path(mc_folder, &modpack_name).join("modConfigV2.json");
-            // Re-read under a process-wide lock so concurrent downloads merge
-            // their entries instead of each writing an old host snapshot.
-            let manifest: InstalledModpack = serde_json::from_reader(
-                std::fs::File::open(&manifest_path)
-                    .map_err(|_| anyhow::Error::from(crate::error::ErrorCode::ModpackMissing))?,
-            )?;
+            let modpack_folder = crate::models::modpack_path(mc_folder, &modpack_name);
+            let manifest = crate::modpacks::read_manifest(&modpack_folder, &modpack_name)?
+                .ok_or_else(|| anyhow::Error::from(crate::error::ErrorCode::ModpackMissing))?;
             let mut modpack = LocalModpack::from((manifest, false, 0));
             let is_replaced = |existing: &InstalledMod| existing.is_same_mod(&local_mod);
             let old_file_paths: Vec<PathBuf> = modpack
@@ -823,15 +808,15 @@ pub fn install_local_file(
                 .iter()
                 .filter(|existing| is_replaced(existing))
                 .filter_map(|existing| download_file_name(&existing.download_url))
-                .map(|name| crate::models::modpack_path(mc_folder, &modpack_name).join(name))
+                .map(|name| modpack_folder.join(name))
                 .collect();
             modpack.mods.retain(|existing| !is_replaced(existing));
             modpack.mods.push(local_mod.clone());
 
             (
-                crate::models::modpack_path(mc_folder, &modpack_name).join(&target_file_name),
+                modpack_folder.join(&target_file_name),
                 Some(modpack),
-                Some(manifest_path),
+                Some(modpack_folder),
                 old_file_paths,
             )
         }
@@ -888,12 +873,8 @@ pub fn install_local_file(
             std::fs::remove_file(old_path)?;
         }
     }
-    if let (Some(manifest_path), Some(updated_modpack)) = (manifest_path, updated_modpack.as_ref())
-    {
-        crate::modpacks::write_file_atomically(
-            manifest_path,
-            serde_json::to_string_pretty(&InstalledModpack::from(updated_modpack.clone()))?,
-        )?;
+    if let (Some(folder), Some(updated_modpack)) = (manifest_folder, updated_modpack.as_ref()) {
+        crate::modpacks::write_manifest(&folder, &InstalledModpack::from(updated_modpack.clone()))?;
     }
     Ok(updated_modpack)
 }

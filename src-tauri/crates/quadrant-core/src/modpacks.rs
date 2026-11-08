@@ -86,6 +86,55 @@ pub(crate) fn write_atomically(
     result
 }
 
+/// Every modpack manifest read-modify-write runs under this, so a write never
+/// starts from a copy another one has since replaced: the process-wide mutex,
+/// then an advisory lock on `<mcFolder>/modpacks/.modpacks.lock` that the other
+/// apps sharing the game folder take too. Re-read the manifest with
+/// [`read_manifest`] once it is held.
+pub(crate) struct ManifestLock {
+    _file: std::fs::File,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+static MODPACK_MANIFEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub(crate) fn lock_manifests(mc_folder: &Path) -> Result<ManifestLock> {
+    let guard = MODPACK_MANIFEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let modpacks_folder = mc_folder.join("modpacks");
+    std::fs::create_dir_all(&modpacks_folder)?;
+    Ok(ManifestLock {
+        _file: lock_file(&modpacks_folder.join(".modpacks.lock"))?,
+        _guard: guard,
+    })
+}
+
+/// The manifest of the pack `name` in `folder` as it is on disk now:
+/// `modConfigV2.json`, else a legacy `modConfig.json`, else `None`.
+pub(crate) fn read_manifest(folder: &Path, name: &str) -> Result<Option<InstalledModpack>> {
+    for file in ["modConfigV2.json", "modConfig.json"] {
+        match std::fs::read(folder.join(file)) {
+            Ok(raw) => {
+                return serde_json::from_slice(&raw)
+                    .map(Some)
+                    .map_err(|error| crate::models::unreadable_manifest(name, error));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(None)
+}
+
+pub(crate) fn write_manifest(folder: &Path, manifest: &InstalledModpack) -> Result<()> {
+    write_file_atomically(
+        folder.join("modConfigV2.json"),
+        serde_json::to_string_pretty(manifest)?,
+    )?;
+    Ok(())
+}
+
 pub(crate) fn validate_modpack_name(name: &str) -> Result<()> {
     if !is_single_path_component(name) {
         return Err(anyhow::Error::from(
@@ -285,22 +334,8 @@ pub async fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<Local
             }
         }
 
-        if needs_rewrite {
-            match write_file_atomically(&modpack_config_v2, serde_json::to_string_pretty(&modpack)?)
-            {
-                Ok(()) => {
-                    if has_v1 && !has_v2 {
-                        let _ = std::fs::remove_file(&modpack_config_v1);
-                    }
-                }
-                Err(e) => {
-                    log::error!(
-                        "Failed to write modConfigV2.json for modpack \"{}\": {}",
-                        name,
-                        e
-                    );
-                }
-            }
+        if needs_rewrite && let Err(e) = record_listing_changes(mc_folder, &path, &modpack) {
+            log::error!("Failed to write modConfigV2.json for modpack \"{name}\": {e}");
         }
 
         let v2_file_count = if modpack_config_v2.exists() { 1 } else { 0 };
@@ -317,6 +352,45 @@ pub async fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<Local
     }
 
     Ok(modpacks)
+}
+
+/// Writes what listing learned, names fetched for bare entries and the move
+/// from `modConfig.json` to `modConfigV2.json`, onto the manifest as it is now:
+/// the fetches took a while, and another write may have landed meanwhile.
+fn record_listing_changes(
+    mc_folder: &Path,
+    folder: &Path,
+    listed: &InstalledModpack,
+) -> Result<()> {
+    let _lock = lock_manifests(mc_folder)?;
+    let Some(mut manifest) = read_manifest(folder, &listed.name)? else {
+        return Ok(());
+    };
+    for mod_ in manifest.mods.iter_mut().filter(|mod_| mod_.name.is_empty()) {
+        let enriched = listed.mods.iter().find(|enriched| {
+            !enriched.name.is_empty()
+                && enriched.id == mod_.id
+                && enriched.source == mod_.source
+                && enriched.download_url == mod_.download_url
+        });
+        if let Some(enriched) = enriched {
+            *mod_ = InstalledMod {
+                sha512: mod_.sha512.take(),
+                ..enriched.clone()
+            };
+        }
+    }
+    let migrating = !folder.join("modConfigV2.json").exists();
+    if migrating {
+        manifest.mod_config_version = "2".to_string();
+        manifest.quadrant_version = crate::models::quadrant_version();
+    }
+    manifest.name = listed.name.clone();
+    write_manifest(folder, &manifest)?;
+    if migrating {
+        let _ = std::fs::remove_file(folder.join("modConfig.json"));
+    }
+    Ok(())
 }
 
 /// Name prefix of the folder a real `mods` directory is set aside under, shared
@@ -495,20 +569,23 @@ pub fn update_modpack(
         }
     }
 
-    if let Some(name) = name.clone() {
-        modpack.name = name;
-    }
+    let _lock = lock_manifests(mc_folder)?;
+    let mut manifest = read_manifest(&modpack_folder, modpack_source)?
+        .unwrap_or_else(|| InstalledModpack::from(modpack.clone()));
+    manifest.mod_config_version = "2".to_string();
+    manifest.quadrant_version = crate::models::quadrant_version();
+    manifest.name = name.unwrap_or_else(|| original_name.clone());
     if let Some(version) = version {
-        modpack.version = version;
+        manifest.version = version;
     }
     if let Some(mod_loader) = mod_loader {
-        modpack.mod_loader = mod_loader;
+        manifest.mod_loader = mod_loader;
     }
-
-    write_file_atomically(
-        modpack_folder.join("modConfigV2.json"),
-        serde_json::to_string_pretty(&InstalledModpack::from(modpack.clone()))?,
-    )?;
+    write_manifest(&modpack_folder, &manifest)?;
+    modpack.name = manifest.name;
+    modpack.version = manifest.version;
+    modpack.mod_loader = manifest.mod_loader;
+    modpack.mods = manifest.mods;
 
     if modpack.name != original_name {
         let was_applied = modpack.is_applied;
@@ -561,18 +638,12 @@ pub async fn register_mod(
 ) -> Result<()> {
     validate_modpack_name(modpack_name)?;
     log::info!("Registering mod {} in modpack \"{modpack_name}\"", mod_.id);
-    let mut modpack = existing_modpacks
+    let modpack = existing_modpacks
         .iter()
         .find(|modpack| modpack.name == modpack_name)
         .cloned()
         .ok_or_else(|| anyhow::Error::from(crate::error::ErrorCode::ModpackMissing))?;
     modpack.ensure_manifest_readable()?;
-
-    if modpack.mods.iter().any(|existing| existing.id == mod_.id) {
-        return Err(anyhow::Error::from(
-            crate::error::ErrorCode::ModAlreadyRegistered,
-        ));
-    }
 
     if mod_.name.is_empty() && mod_.source != ModSource::Online {
         match enrich_installed_mod(mod_.clone()).await {
@@ -588,19 +659,24 @@ pub async fn register_mod(
 
     // The file already in the pack is what this entry installs. A hash sent
     // along (from identifying a renamed file) only stands in when it is absent.
+    let modpack_folder = modpack_path(mc_folder, modpack_name);
     let installed_file = crate::mc_mod::download_file_name(&mod_.download_url)
-        .map(|file_name| modpack_path(mc_folder, modpack_name).join(file_name))
+        .map(|file_name| modpack_folder.join(file_name))
         .filter(|path| path.is_file());
     if let Some(path) = installed_file {
         mod_.sha512 = Some(tokio::task::spawn_blocking(move || file_sha512(&path)).await??);
     }
-    modpack.mods.push(mod_);
 
-    write_file_atomically(
-        modpack_path(mc_folder, modpack_name).join("modConfigV2.json"),
-        serde_json::to_string_pretty(&InstalledModpack::from(modpack))?,
-    )?;
-    Ok(())
+    let _lock = lock_manifests(mc_folder)?;
+    let mut manifest = read_manifest(&modpack_folder, modpack_name)?
+        .unwrap_or_else(|| InstalledModpack::from(modpack));
+    if manifest.mods.iter().any(|existing| existing.id == mod_.id) {
+        return Err(anyhow::Error::from(
+            crate::error::ErrorCode::ModAlreadyRegistered,
+        ));
+    }
+    manifest.mods.push(mod_);
+    write_manifest(&modpack_folder, &manifest)
 }
 
 /// Removes a mod entry and its downloaded file from a modpack.
@@ -620,6 +696,10 @@ pub fn delete_mod(
     modpack.ensure_manifest_readable()?;
 
     let modpack_folder = modpack_path(mc_folder, modpack_name);
+    let _lock = lock_manifests(mc_folder)?;
+    if let Some(manifest) = read_manifest(&modpack_folder, modpack_name)? {
+        modpack.mods = manifest.mods;
+    }
     let to_delete_ids: Vec<_> = modpack
         .mods
         .iter()
@@ -660,10 +740,7 @@ pub fn delete_mod(
         }
     }
 
-    write_file_atomically(
-        modpack_folder.join("modConfigV2.json"),
-        serde_json::to_string_pretty(&InstalledModpack::from(modpack.clone()))?,
-    )?;
+    write_manifest(&modpack_folder, &InstalledModpack::from(modpack.clone()))?;
     Ok(modpack)
 }
 
@@ -671,17 +748,7 @@ pub fn delete_mod(
 /// holding a listing from elsewhere cannot push it over the real one.
 pub fn check_manifest_readable(mc_folder: &Path, name: &str) -> Result<()> {
     validate_modpack_name(name)?;
-    let folder = modpack_path(mc_folder, name);
-    let manifest = ["modConfigV2.json", "modConfig.json"]
-        .into_iter()
-        .map(|file| folder.join(file))
-        .find(|path| path.exists());
-    let Some(manifest) = manifest else {
-        return Ok(());
-    };
-    serde_json::from_slice::<InstalledModpack>(&std::fs::read(manifest)?)
-        .map(drop)
-        .map_err(|error| crate::models::unreadable_manifest(name, error))
+    read_manifest(&modpack_path(mc_folder, name), name).map(drop)
 }
 
 /// Records a `sha512` for every entry whose file is in its pack folder but
@@ -689,6 +756,7 @@ pub fn check_manifest_readable(mc_folder: &Path, name: &str) -> Result<()> {
 /// on every launch: entries that have one, and packs with nothing to add, are
 /// left alone, so after the first launch of a version it finds no work.
 pub async fn backfill_mod_hashes(mc_folder: &Path) -> Result<usize> {
+    let mc_folder = mc_folder.to_path_buf();
     let modpacks_folder = mc_folder.join("modpacks");
     tokio::task::spawn_blocking(move || {
         let Ok(entries) = std::fs::read_dir(&modpacks_folder) else {
@@ -699,7 +767,7 @@ pub async fn backfill_mod_hashes(mc_folder: &Path) -> Result<usize> {
             if !folder.is_dir() {
                 continue;
             }
-            match backfill_pack_hashes(&folder) {
+            match backfill_pack_hashes(&mc_folder, &folder) {
                 Ok(count) => recorded += count,
                 Err(error) => log::warn!(
                     "Skipped recording file hashes for {}: {error}",
@@ -712,7 +780,7 @@ pub async fn backfill_mod_hashes(mc_folder: &Path) -> Result<usize> {
     .await?
 }
 
-fn backfill_pack_hashes(folder: &Path) -> Result<usize> {
+fn backfill_pack_hashes(mc_folder: &Path, folder: &Path) -> Result<usize> {
     let manifest_path = folder.join("modConfigV2.json");
     if !manifest_path.is_file() {
         return Ok(0);
@@ -736,9 +804,7 @@ fn backfill_pack_hashes(folder: &Path) -> Result<usize> {
 
     // Hashing takes a while, so the manifest is read again under the lock and
     // only entries that still name the same download take a hash.
-    let _guard = crate::mc_mod::MODPACK_MANIFEST_LOCK
-        .lock()
-        .map_err(|_| anyhow!("Modpack manifest lock poisoned"))?;
+    let _lock = lock_manifests(mc_folder)?;
     let mut manifest = read_manifest()?;
     let mut recorded = 0;
     for mod_ in manifest
@@ -890,13 +956,24 @@ pub async fn install_modpack(
         return Err(error);
     }
 
-    // Only files the previous manifest tracked go, and the plan is made before
+    let locked = lock_manifests(mc_folder).and_then(|lock| {
+        let current = read_manifest(&modpack_folder, &mod_config.name)?;
+        Ok((lock, current))
+    });
+    let (_lock, current_mod_config) = match locked {
+        Ok(locked) => locked,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    };
+    // Only files the manifest tracks now go, and the plan is made before
     // anything moves. Entries from an older URL policy still name their jar.
     let expected_lowercase: HashSet<_> = expected_file_names
         .iter()
         .map(|name| name.to_lowercase())
         .collect();
-    let obsolete_files: Vec<_> = old_mod_config
+    let obsolete_files: Vec<_> = current_mod_config
         .iter()
         .flat_map(|old| &old.mods)
         .filter_map(|old_mod| crate::mc_mod::download_file_name(&old_mod.download_url))
@@ -1570,6 +1647,113 @@ mod tests {
             sha512: Some(crate::mc_mod::cache::sha512_hex(contents)),
             ..mod_
         }
+    }
+
+    /// Adds an entry behind the back of a listing, as another app sharing the
+    /// game folder would.
+    fn add_entry_elsewhere(mc_folder: &Path, mod_: InstalledMod) {
+        let mut manifest = read_manifest(mc_folder, "alpha");
+        manifest.mods.push(mod_);
+        std::fs::write(
+            modpack_path(mc_folder, "alpha").join("modConfigV2.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn entry_ids(mc_folder: &Path) -> Vec<String> {
+        read_manifest(mc_folder, "alpha")
+            .mods
+            .into_iter()
+            .map(|mod_| mod_.id)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn manifest_edits_from_a_stale_listing_keep_entries_written_since() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        seed_pack(
+            &mc_folder,
+            vec![online_mod("old", "https://example.com/old.jar".to_string())],
+            &[],
+        );
+        let stale = get_modpacks(&mc_folder, false).await.unwrap();
+
+        add_entry_elsewhere(
+            &mc_folder,
+            online_mod("first", "https://example.com/first.jar".to_string()),
+        );
+        delete_mod(&mc_folder, &stale, "alpha", "old").unwrap();
+        assert_eq!(entry_ids(&mc_folder), ["first"]);
+
+        add_entry_elsewhere(
+            &mc_folder,
+            online_mod("second", "https://example.com/second.jar".to_string()),
+        );
+        register_mod(
+            &mc_folder,
+            &stale,
+            online_mod("third", "https://example.com/third.jar".to_string()),
+            "alpha",
+        )
+        .await
+        .unwrap();
+        assert_eq!(entry_ids(&mc_folder), ["first", "second", "third"]);
+
+        let updated = update_modpack(
+            &mc_folder,
+            &stale,
+            "alpha",
+            None,
+            Some("1.21".to_string()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(entry_ids(&mc_folder), ["first", "second", "third"]);
+        assert_eq!(updated.mods.len(), 3);
+        assert_eq!(read_manifest(&mc_folder, "alpha").version, "1.21");
+
+        // Registering what another writer already added is still refused.
+        let duplicate = register_mod(
+            &mc_folder,
+            &stale,
+            online_mod("second", "https://example.com/second.jar".to_string()),
+            "alpha",
+        )
+        .await;
+        assert!(duplicate.is_err());
+
+        // The lock file beside the packs is neither a pack nor a stray file.
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        assert!(mc_folder.join("modpacks/.modpacks.lock").is_file());
+        assert_eq!(listed.len(), 1);
+        assert!(!listed[0].unknown_mods);
+    }
+
+    #[test]
+    fn concurrent_manifest_edits_lose_no_entry() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        seed_pack(&mc_folder, Vec::new(), &[]);
+        let stale = futures::executor::block_on(get_modpacks(&mc_folder, false)).unwrap();
+        std::thread::scope(|scope| {
+            for worker in 0..4 {
+                let (mc_folder, stale) = (&mc_folder, &stale);
+                scope.spawn(move || {
+                    for index in 0..10 {
+                        let id = format!("mod-{worker}-{index}");
+                        let url = format!("https://example.com/{id}.jar");
+                        futures::executor::block_on(register_mod(
+                            mc_folder,
+                            stale,
+                            online_mod(&id, url),
+                            "alpha",
+                        ))
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(entry_ids(&mc_folder).len(), 40);
     }
 
     #[tokio::test]
