@@ -5,7 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Result,
-    account::{account_http_client, backend_base_url, send_with_token_refresh},
+    account::{
+        account_http_client, backend_base_url,
+        id::{parse_success_body, response_preview},
+        send_with_token_refresh,
+    },
     models::InstalledModpack,
     ports::{SecretStore, SettingsStore},
 };
@@ -56,28 +60,7 @@ async fn parse_json_response<T: DeserializeOwned>(
         ));
     }
 
-    let trimmed = response_raw.trim();
-    if trimmed.is_empty() {
-        return Err(anyhow::anyhow!("{empty_body_error}"));
-    }
-
-    serde_json::from_str(trimmed).map_err(|error| {
-        anyhow::anyhow!(
-            "{}: invalid JSON response: {}; body preview: {}",
-            error_prefix,
-            error,
-            response_preview(trimmed)
-        )
-    })
-}
-
-fn response_preview(body: &str) -> String {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return "<empty body>".to_string();
-    }
-
-    trimmed.chars().take(300).collect()
+    parse_success_body(&response_raw, error_prefix, empty_body_error)
 }
 
 /// Submits a modpack to Quadrant Share using the current settings and account state.

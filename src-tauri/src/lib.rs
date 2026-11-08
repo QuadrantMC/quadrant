@@ -19,6 +19,22 @@ use tauri_plugin_deep_link::DeepLinkExt;
 #[cfg(feature = "updater")]
 use tauri_plugin_updater::UpdaterExt;
 
+/// Defines the Tauri commands that only pass their arguments to the
+/// `QuadrantHost` method of the same name and report its error with a stable
+/// code. Commands that do more (blocking work, events, a dialog) are written
+/// out where they live.
+macro_rules! host_commands {
+    ($($name:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;)*) => {$(
+        #[tauri::command]
+        pub async fn $name($($arg: $ty,)* app: tauri::AppHandle) -> Result<$ret, tauri::Error> {
+            tauri::Manager::state::<quadrant_host::QuadrantHost>(&app)
+                .$name($($arg),*)
+                .await
+                .map_err($crate::command_error)
+        }
+    )*};
+}
+
 #[cfg(feature = "quadrant_id")]
 pub mod account;
 
@@ -30,7 +46,6 @@ pub mod other;
 pub mod tauri_adapter;
 
 pub struct AppState {
-    pub updated_modpacks: Vec<String>,
     pub is_update_enabled: bool,
     pub update: Option<tauri_plugin_updater::Update>,
     pub update_bytes: Vec<u8>,
@@ -119,23 +134,31 @@ pub(crate) fn command_error(error: impl Into<anyhow::Error>) -> tauri::Error {
     quadrant_core::error::user_facing(error.into()).into()
 }
 
+/// Brings the window up from the tray or a later launch. A window that is
+/// closing can refuse any step, which is logged instead of panicking the event
+/// loop.
+fn show_window(window: &tauri::WebviewWindow) {
+    if let Err(e) = window.set_enabled(true) {
+        log::error!("Failed to enable window: {e}");
+    }
+    if let Err(e) = window.show() {
+        log::error!("Failed to show window: {e}");
+    }
+    if let Err(e) = window.unminimize() {
+        log::error!("Failed to unminimize window: {e}");
+    }
+    if let Err(e) = window.set_focus() {
+        log::error!("Failed to focus window: {e}");
+    }
+}
+
 /// Brings the window back for a later launch of either app and opens its
 /// links, as the launch would have.
 fn reveal(app: &tauri::AppHandle, links: &[String]) {
-    log::info!("A later launch handed over {links:?}");
+    // Not the links: a sign-in link carries an authorization code.
+    log::info!("A later launch handed over {} link(s)", links.len());
     if let Some(window) = app.get_webview_window("main") {
-        if let Err(e) = window.set_enabled(true) {
-            log::error!("Failed to enable window: {e}");
-        }
-        if let Err(e) = window.show() {
-            log::error!("Failed to show window: {e}");
-        }
-        if let Err(e) = window.unminimize() {
-            log::error!("Failed to unminimize window: {e}");
-        }
-        if let Err(e) = window.set_focus() {
-            log::error!("Failed to focus window: {e}");
-        }
+        show_window(&window);
         if let Err(e) = window.center() {
             log::error!("Failed to center window: {e}");
         }
@@ -145,6 +168,7 @@ fn reveal(app: &tauri::AppHandle, links: &[String]) {
             .handle_cli_arguments(["quadrant", link.as_str()].into_iter());
     }
 }
+
 // Compile-time credentials are embedded only by the features that call the
 // Quadrant backend with them, so `--no-default-features` builds need none.
 #[cfg(feature = "quadrant_id")]
@@ -177,7 +201,7 @@ fn build_quadrant_host(
         QUADRANT_OAUTH2_CLIENT_SECRET,
         QUADRANT_API_KEY,
     );
-    options.api_base_url = api_base_url.or_else(|| std::env::var("QUADRANT_API_BASE_URL").ok());
+    options.api_base_url = api_base_url;
     options.app_version = app.package_info().version.to_string();
     options.os_name = tauri_plugin_os::platform().to_string().to_uppercase();
     QuadrantHost::new(options)
@@ -226,7 +250,6 @@ pub async fn run(launch: Launch) {
 
     let builder = tauri::Builder::default()
         .manage(Mutex::new(AppState {
-            updated_modpacks: vec![],
             is_update_enabled: false,
             update: None,
             update_bytes: vec![],
@@ -279,6 +302,17 @@ pub async fn run(launch: Launch) {
             app.manage(host.clone());
             log::info!("Initializing app...\nInitializing config...");
             host.init_config()?;
+            let backfill_host = host.clone();
+            tauri::async_runtime::spawn(async move {
+                match backfill_host.backfill_mod_hashes().await {
+                    Ok(0) => {}
+                    Ok(count) => log::info!("Recorded the file hashes of {count} mod(s)"),
+                    Err(error) => log::warn!("Failed to record mod file hashes: {error}"),
+                }
+                if let Err(error) = backfill_host.prune_mod_cache().await {
+                    log::warn!("Failed to prune the mod cache: {error}");
+                }
+            });
 
             if let Some(primary) = primary {
                 let handle = app.handle().clone();
@@ -369,7 +403,9 @@ pub async fn run(launch: Launch) {
             }
 
             if let Some(ref matches) = matches {
-                log::info!("Matches: {:?}", matches);
+                // The matches hold the launch's positional link, which a
+                // sign-in redirect fills with an authorization code.
+                log::info!("Launched with {} argument(s)", matches.args.len());
                 let autostart = matches.args.get_key_value("autostart");
                 if autostart.is_some() {
                     let autostart = autostart.unwrap();
@@ -451,11 +487,7 @@ pub async fn run(launch: Launch) {
                     } = event
                         && let Some(window) = tray.app_handle().get_webview_window("main")
                     {
-                        window.set_enabled(true).unwrap();
-
-                        window.show().unwrap();
-                        window.set_focus().unwrap();
-                        window.unminimize().unwrap();
+                        show_window(&window);
                     }
                 });
                 tray.on_menu_event(|app, event| match event.id.as_ref() {
@@ -464,13 +496,12 @@ pub async fn run(launch: Launch) {
                     }
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
-                            window.set_enabled(true).unwrap();
-                            if window.is_visible().unwrap() {
-                                window.hide().unwrap();
+                            if window.is_visible().unwrap_or(false) {
+                                if let Err(e) = window.hide() {
+                                    log::error!("Failed to hide window: {e}");
+                                }
                             } else {
-                                window.show().unwrap();
-                                window.set_focus().unwrap();
-                                window.unminimize().unwrap();
+                                show_window(&window);
                             }
                         }
                     }
@@ -546,8 +577,6 @@ pub async fn run(launch: Launch) {
             other::telemetry::send_telemetry,
             #[cfg(feature = "telemetry")]
             other::telemetry::remove_telemetry,
-            #[cfg(feature = "quadrant_id")]
-            account::set_secret,
             #[cfg(feature = "quadrant_id")]
             account::clear_account_token,
             #[cfg(feature = "quadrant_id")]
@@ -685,8 +714,17 @@ async fn check_update(_app: tauri::AppHandle) -> Result<(), anyhow::Error> {
         let updater = app
             .updater_builder()
             .endpoints(update_urls)?
-            .version_comparator(|current, update| update.version != current)
+            .version_comparator(|current, update| {
+                quadrant_host::updates::is_update(&current.to_string(), &update.version.to_string())
+            })
             .header("User-Agent", quadrant_core::mc_mod::get_user_agent())?
+            // Per read rather than `timeout`, which would cap the whole
+            // installer download.
+            .configure_client(|client| {
+                client
+                    .connect_timeout(std::time::Duration::from_secs(30))
+                    .read_timeout(std::time::Duration::from_secs(60))
+            })
             .build()?;
 
         if let Some(update) = updater.check().await? {
@@ -796,7 +834,7 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), tauri::Error> {
         return Err(anyhow::anyhow!("No update available").into());
     }
     let update = update.unwrap();
-    let update_bytes = state.update_bytes.clone();
+    let update_bytes = std::mem::take(&mut state.update_bytes);
     update
         .install(update_bytes)
         .map_err(|e| tauri::Error::from(anyhow::Error::from(e)))?;

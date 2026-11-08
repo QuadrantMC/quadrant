@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use quadrant_core::ports::Shell;
 use quadrant_host::QuadrantHost;
@@ -7,10 +7,6 @@ use tauri::{AppHandle, Manager};
 pub use quadrant_core::models::{InstalledModpack, LocalModpack, ModLoader, SyncInfo};
 
 use crate::tauri_adapter::TauriShell;
-
-pub fn get_modpack_path(mc_folder: &Path, modpack: &LocalModpack) -> PathBuf {
-    quadrant_core::models::modpack_path(mc_folder, &modpack.name)
-}
 
 #[tauri::command]
 pub async fn get_modpacks(hide_free: bool, app: AppHandle) -> Vec<LocalModpack> {
@@ -32,19 +28,8 @@ pub fn frontend_apply_modpack(name: String, app: AppHandle) -> Result<(), tauri:
         .map_err(crate::command_error)
 }
 
-pub fn apply_modpack(name: String, app: AppHandle) -> Result<(), anyhow::Error> {
-    app.state::<QuadrantHost>().frontend_apply_modpack(name)
-}
-
-#[tauri::command]
-pub async fn install_modpack(
-    mod_config: InstalledModpack,
-    app: AppHandle,
-) -> Result<(), tauri::Error> {
-    app.state::<QuadrantHost>()
-        .install_modpack(mod_config)
-        .await
-        .map_err(crate::command_error)
+host_commands! {
+    install_modpack(mod_config: InstalledModpack) -> ();
 }
 
 #[tauri::command]
@@ -81,8 +66,67 @@ pub async fn export_modpack_to(
     destination: String,
     app: AppHandle,
 ) -> Result<(), tauri::Error> {
+    // The save dialog runs in the webview, so this path comes from there.
+    // Only an archive may be written, never any file the renderer names.
+    let Some(destination) = export_archive_path(PathBuf::from(destination)) else {
+        return Err(crate::command_error(anyhow::anyhow!(
+            "an export must be saved as a .zip file"
+        )));
+    };
     app.state::<QuadrantHost>()
-        .export_modpack_to(modpack, destination.into())
+        .export_modpack_to(modpack, destination)
         .await
         .map_err(crate::command_error)
+}
+
+/// `path` if it names a `.zip` file, else `path` with `.zip` added, the way
+/// the save dialog would have if it had a filter. `None` when `path` names no
+/// file at all.
+fn export_archive_path(path: PathBuf) -> Option<PathBuf> {
+    let is_archive = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+        && path.file_stem().is_some_and(|stem| !stem.is_empty());
+    if is_archive {
+        return Some(path);
+    }
+    path.file_name()?;
+    let mut archive = path.into_os_string();
+    archive.push(".zip");
+    Some(archive.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::export_archive_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn exports_are_written_only_to_zip_files() {
+        for (chosen, written) in [
+            (
+                "C:\\Users\\a\\Pack.quadrantExport.zip",
+                "C:\\Users\\a\\Pack.quadrantExport.zip",
+            ),
+            ("/home/a/pack.ZIP", "/home/a/pack.ZIP"),
+            ("/home/a/mypack", "/home/a/mypack.zip"),
+            ("C:\\Users\\a\\.bashrc", "C:\\Users\\a\\.bashrc.zip"),
+            ("/home/a/.profile", "/home/a/.profile.zip"),
+            ("/home/a/pack.zip.sh", "/home/a/pack.zip.sh.zip"),
+            ("/home/a/.zip", "/home/a/.zip.zip"),
+        ] {
+            assert_eq!(
+                export_archive_path(PathBuf::from(chosen)),
+                Some(PathBuf::from(written)),
+                "{chosen}"
+            );
+        }
+        for refused in ["", "/", "/home/a/.."] {
+            assert_eq!(
+                export_archive_path(PathBuf::from(refused)),
+                None,
+                "{refused}"
+            );
+        }
+    }
 }

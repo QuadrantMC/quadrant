@@ -43,7 +43,7 @@ jobs:
       # `push` it shells out to git, so the repository has to be present.
       - uses: actions/checkout@v6
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: filter
         with:
           filters: |
@@ -78,8 +78,9 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: 1.99.0
           components: rustfmt, clippy
 
       - name: Install Linux desktop dependencies
@@ -87,7 +88,7 @@ jobs:
           sudo apt update
           sudo apt install -y libwebkit2gtk-4.1-dev xdg-utils libappindicator3-dev librsvg2-dev patchelf libsecret-1-dev
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: "./src-tauri -> target"
           # Only the default branch writes a cache other refs can read, so PR
@@ -124,7 +125,7 @@ jobs:
           node-version: 24
 
       - name: Setup bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.4
 
@@ -161,10 +162,12 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.0
 
       - name: Install Linux desktop dependencies
         run: |
@@ -188,7 +191,7 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: "./src-tauri -> target"
           save-if: ${{ github.ref == 'refs/heads/next' }}
@@ -213,17 +216,18 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: 1.99.0
           targets: aarch64-apple-darwin
 
       - name: Install frontend dependencies
         run: bun install
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: "./src-tauri -> target"
           save-if: ${{ github.ref == 'refs/heads/next' }}

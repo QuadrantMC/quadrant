@@ -756,6 +756,7 @@ mod tests {
             is_applied,
             last_synced: 0,
             modpack_id: None,
+            manifest_error: None,
         }
     }
 

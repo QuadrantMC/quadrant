@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
+use quadrant_core::account::pkce::CODE_CHALLENGE_METHOD;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -28,7 +29,7 @@ pub fn new_state() -> Result<String> {
     Ok(hex::encode(bytes))
 }
 
-pub fn authorize_url(client_id: &str, redirect_uri: &str, state: &str) -> Url {
+pub fn authorize_url(client_id: &str, redirect_uri: &str, state: &str, challenge: &str) -> Url {
     Url::parse_with_params(
         AUTHORIZE_URL,
         [
@@ -37,6 +38,8 @@ pub fn authorize_url(client_id: &str, redirect_uri: &str, state: &str) -> Url {
             ("scope", SCOPES),
             ("response_type", "code"),
             ("state", state),
+            ("code_challenge", challenge),
+            ("code_challenge_method", CODE_CHALLENGE_METHOD),
         ],
     )
     .expect("the authorize URL is a valid base")
@@ -200,7 +203,7 @@ mod tests {
 
     #[test]
     fn authorize_url_encodes_every_parameter() {
-        let url = authorize_url("client", "http://127.0.0.1:4000", "abc");
+        let url = authorize_url("client", "http://127.0.0.1:4000", "abc", "chal");
         let pairs: Vec<(String, String)> = url
             .query_pairs()
             .map(|(key, value)| (key.into_owned(), value.into_owned()))
@@ -209,6 +212,8 @@ mod tests {
         assert!(pairs.contains(&("redirect_uri".into(), "http://127.0.0.1:4000".into())));
         assert!(pairs.contains(&("scope".into(), SCOPES.into())));
         assert!(pairs.contains(&("response_type".into(), "code".into())));
+        assert!(pairs.contains(&("code_challenge".into(), "chal".into())));
+        assert!(pairs.contains(&("code_challenge_method".into(), "S256".into())));
         assert!(!url.as_str().contains(' '));
     }
 

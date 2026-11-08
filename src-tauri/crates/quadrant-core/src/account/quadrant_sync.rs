@@ -374,6 +374,7 @@ mod tests {
             is_applied: false,
             last_synced: 0,
             modpack_id: Some("modpack-1".to_string()),
+            manifest_error: None,
         }
     }
 

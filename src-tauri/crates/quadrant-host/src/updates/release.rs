@@ -39,11 +39,11 @@ impl Release {
         Ok(release)
     }
 
-    /// Whether to install it. Like Tauri's updater as Quadrant configures
-    /// it, any other version counts, so moving from preview back to stable
-    /// moves to stable's release.
+    /// Whether to install it: newer in its release line, or from another
+    /// line, so moving from preview back to stable moves to stable's
+    /// release. See [`super::is_update`].
     pub fn is_update_for(&self, current_version: &str) -> bool {
-        self.version != current_version
+        super::is_update(current_version, &self.version)
     }
 
     /// The download must use TLS unless a test server serves it.
@@ -126,6 +126,7 @@ impl Updater {
         let client = reqwest::Client::builder()
             .user_agent(&self.user_agent)
             .connect_timeout(Duration::from_secs(30))
+            .read_timeout(Duration::from_secs(60))
             .build()?;
         let Some(release) = fetch(&client, &self.urls(channel)).await? else {
             log::info!("No {} release on {channel}", channel.app().name());

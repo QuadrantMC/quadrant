@@ -1,10 +1,4 @@
-use std::fs;
-
 pub type Buffer = Vec<u8>;
-
-pub fn get_jar_contents(path: &str) -> Buffer {
-    fs::read(path).unwrap_or_default()
-}
 
 pub fn compute_hash(buffer: &Buffer) -> u32 {
     const MULTIPLEX: u32 = 1540483477;
@@ -98,10 +92,5 @@ mod tests {
             compute_hash(&vec![9, 10, 13, 32, 32, 13, 10, 9]),
             compute_hash(&Vec::new())
         );
-    }
-
-    #[test]
-    fn get_jar_contents_returns_empty_for_missing_file() {
-        assert!(get_jar_contents("/nonexistent/quadrant-test.jar").is_empty());
     }
 }

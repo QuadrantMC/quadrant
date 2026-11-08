@@ -7,6 +7,7 @@ use quadrant_core::{
     error::ErrorCode,
     mc_mod::{GetModArgs, Mod},
     models::{InstalledMod, LocalModpack, ModLoader, ModSource, modpack_path},
+    modpacks::review_incoming_mods,
 };
 use quadrant_host::QuadrantHost;
 use serde::Serialize;
@@ -542,16 +543,84 @@ pub async fn import(ctx: &Ctx, code: &str, name: Option<String>, yes: bool) -> R
         modpack.name = valid_name(&name)?;
     }
     let installed = modpack.name.clone();
+    confirm_unverifiable_files(ctx, &modpack.mods, yes)?;
     confirm_replace(&ctx.host, &installed, yes)?;
     let _progress = ctx.out.track_progress(&ctx.host);
     ctx.host.install_modpack(modpack).await?;
     Ok(Report::message(format!("Installed {installed}.")))
 }
 
-/// Quotes an argument for a POSIX shell: single quotes keep everything
-/// literal, and an embedded `'` closes them, is escaped, and reopens them.
+/// Quotes an argument for the shell the hint is pasted into: PowerShell on
+/// Windows, a POSIX shell elsewhere.
 fn shell_quote(arg: &str) -> String {
-    format!("'{}'", arg.replace('\'', r"'\''"))
+    shell_quote_for(arg, cfg!(windows))
+}
+
+/// Single quotes keep everything literal in both. A POSIX shell ends them at
+/// the next `'`, so an embedded one closes, is escaped, and reopens them.
+/// PowerShell doubles it, and reads the typographic single quotes as quotes
+/// too. Control characters are dropped: a line break would split the command.
+fn shell_quote_for(arg: &str, powershell: bool) -> String {
+    let mut quoted = String::from("'");
+    for ch in arg.chars().filter(|ch| !ch.is_control()) {
+        match ch {
+            '\'' if !powershell => quoted.push_str(r"'\''"),
+            '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' if powershell => {
+                quoted.push(ch);
+                quoted.push(ch);
+            }
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
+/// Asks before installing a pack whose files Quadrant can't vouch for: mods
+/// without a hash, and Online mods that download from any host.
+pub fn confirm_unverifiable_files(ctx: &Ctx, mods: &[InstalledMod], yes: bool) -> Result<()> {
+    if let Some(warning) = unverifiable_files_warning(mods) {
+        ctx.out.note(warning);
+        confirm("Install it anyway?", yes)?;
+    }
+    Ok(())
+}
+
+fn unverifiable_files_warning(mods: &[InstalledMod]) -> Option<String> {
+    let review = review_incoming_mods(&[], mods);
+    let list = |lines: Vec<String>| {
+        lines
+            .iter()
+            .map(|line| format!("  {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let mut paragraphs = Vec::new();
+    if !review.unverified.is_empty() {
+        paragraphs.push(format!(
+            "Quadrant can't verify these files. The pack was shared from an older version of Quadrant.\n{}",
+            list(review.unverified.iter().map(|mod_| mod_.display_name().to_string()).collect())
+        ));
+    }
+    if !review.online.is_empty() {
+        paragraphs.push(format!(
+            "These mods download from links, not from Modrinth or CurseForge:\n{}",
+            list(
+                review
+                    .online
+                    .iter()
+                    .map(|mod_| {
+                        let host = url::Url::parse(&mod_.download_url)
+                            .ok()
+                            .and_then(|url| url.host_str().map(ToOwned::to_owned))
+                            .unwrap_or_else(|| mod_.download_url.clone());
+                        format!("{} ({host})", mod_.display_name())
+                    })
+                    .collect()
+            )
+        ));
+    }
+    (!paragraphs.is_empty()).then(|| paragraphs.join("\n\n"))
 }
 
 /// Installing a modpack over a local one with the same name rewrites its mod
@@ -684,6 +753,43 @@ fn valid_name(name: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn installs_name_the_files_quadrant_cant_verify() {
+        let verified = InstalledMod {
+            sha512: Some("hash".to_string()),
+            ..InstalledMod::minimal(
+                "sodium".to_string(),
+                ModSource::Modrinth,
+                "https://cdn.modrinth.com/sodium.jar".to_string(),
+            )
+        };
+        assert_eq!(
+            unverifiable_files_warning(std::slice::from_ref(&verified)),
+            None
+        );
+
+        let old = InstalledMod {
+            name: "Lithium".to_string(),
+            ..InstalledMod::minimal(
+                "lithium".to_string(),
+                ModSource::Modrinth,
+                "https://cdn.modrinth.com/lithium.jar".to_string(),
+            )
+        };
+        let link = InstalledMod {
+            sha512: Some("hash".to_string()),
+            ..InstalledMod::minimal(
+                "link".to_string(),
+                ModSource::Online,
+                "https://files.example.com/link.jar".to_string(),
+            )
+        };
+        assert_eq!(
+            unverifiable_files_warning(&[verified, old, link]).unwrap(),
+            "Quadrant can't verify these files. The pack was shared from an older version of Quadrant.\n  Lithium\n\nThese mods download from links, not from Modrinth or CurseForge:\n  link (files.example.com)"
+        );
+    }
+
     fn modpack(name: &str, last_synced: i64, is_applied: bool) -> LocalModpack {
         LocalModpack {
             name: name.to_string(),
@@ -694,6 +800,7 @@ mod tests {
             is_applied,
             last_synced,
             modpack_id: None,
+            manifest_error: None,
         }
     }
 
@@ -741,9 +848,23 @@ mod tests {
 
     #[test]
     fn shell_quoting_keeps_arguments_literal() {
-        assert_eq!(shell_quote("Bob's Pack"), r"'Bob'\''s Pack'");
-        assert_eq!(shell_quote(r#"$HOME `x` "y""#), r#"'$HOME `x` "y"'"#);
-        assert_eq!(shell_quote(""), "''");
+        assert_eq!(shell_quote_for("Bob's Pack", false), r"'Bob'\''s Pack'");
+        assert_eq!(
+            shell_quote_for(r#"$HOME `x` "y""#, false),
+            r#"'$HOME `x` "y"'"#
+        );
+        assert_eq!(shell_quote_for("", false), "''");
+        assert_eq!(shell_quote_for("a\nb\x1b[2J", false), "'ab[2J'");
+    }
+
+    #[test]
+    fn powershell_quoting_doubles_every_kind_of_single_quote() {
+        assert_eq!(shell_quote_for("Bob's Pack", true), "'Bob''s Pack'");
+        assert_eq!(
+            shell_quote_for("a\u{2019}; x; \u{2018}b", true),
+            "'a\u{2019}\u{2019}; x; \u{2018}\u{2018}b'"
+        );
+        assert_eq!(shell_quote_for("$HOME `x`", true), "'$HOME `x`'");
     }
 
     #[test]

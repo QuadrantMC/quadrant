@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use clap::Subcommand;
+use quadrant_core::account::pkce::Pkce;
 use serde_json::Value;
 
 use crate::{
@@ -12,6 +13,9 @@ use crate::{
 const ACCOUNT_URL: &str = "https://mrquantumoff.dev/account";
 const REGISTER_URL: &str = "https://mrquantumoff.dev/account/register";
 const OAUTH_STATE: &str = "oauthState";
+/// Kept between `account login` and a `quadrantnext://login` link, which the
+/// OS hands to a different process.
+const OAUTH_VERIFIER: &str = "oauthVerifier";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Subcommand)]
@@ -37,7 +41,7 @@ pub async fn run(command: AccountCommand, ctx: &Ctx) -> Result<Report> {
     match command {
         AccountCommand::Login { no_browser } => login(ctx, no_browser).await,
         AccountCommand::Logout => {
-            host.clear_account_token()?;
+            host.clear_account_token().await?;
             Ok(Report::message("Signed out."))
         }
         AccountCommand::Info => {
@@ -80,10 +84,29 @@ fn browse(ctx: &Ctx, url: &str) -> Report {
 async fn login(ctx: &Ctx, no_browser: bool) -> Result<Report> {
     ctx.require_account_build()?;
     let state = oauth::new_state()?;
+    let pkce = Pkce::generate()?;
     config::set(&ctx.host, OAUTH_STATE, Value::String(state.clone()))?;
+    config::set(
+        &ctx.host,
+        OAUTH_VERIFIER,
+        Value::String(pkce.verifier.clone()),
+    )?;
+    let result = run_login(ctx, no_browser, &state, &pkce).await;
+    // A finished, failed or timed-out sign-in leaves nothing a later link
+    // could reuse.
+    forget_sign_in(ctx);
+    result
+}
+
+async fn run_login(ctx: &Ctx, no_browser: bool, state: &str, pkce: &Pkce) -> Result<Report> {
     let (listener, port) = oauth::bind().await?;
     let redirect_uri = format!("http://127.0.0.1:{port}");
-    let url = oauth::authorize_url(&ctx.host.oauth2_client_id(), &redirect_uri, &state);
+    let url = oauth::authorize_url(
+        &ctx.host.oauth2_client_id(),
+        &redirect_uri,
+        state,
+        &pkce.challenge,
+    );
 
     // Printed even with --quiet: without a browser this link is the only way in.
     eprintln!("Sign in to Quadrant ID at:\n{url}");
@@ -91,10 +114,18 @@ async fn login(ctx: &Ctx, no_browser: bool) -> Result<Report> {
         ctx.out.note(format!("Couldn't open a browser: {error}"));
     }
 
-    let code = tokio::time::timeout(LOGIN_TIMEOUT, oauth::wait_for_callback(listener, &state))
+    let code = tokio::time::timeout(LOGIN_TIMEOUT, oauth::wait_for_callback(listener, state))
         .await
         .map_err(|_| anyhow!("the sign-in timed out; run `quadrantmc account login` again"))??;
-    finish_login(ctx, code, redirect_uri).await
+    finish_login(ctx, code, redirect_uri, Some(pkce.verifier.clone())).await
+}
+
+fn forget_sign_in(ctx: &Ctx) {
+    for key in [OAUTH_STATE, OAUTH_VERIFIER] {
+        if let Err(error) = config::unset(&ctx.host, key) {
+            ctx.out.note(format!("Couldn't clear {key}: {error}"));
+        }
+    }
 }
 
 /// Completes a sign-in from a `quadrantnext://login` link, which only counts
@@ -110,12 +141,20 @@ pub async fn login_from_link(
     if state.is_none() || state != expected {
         bail!("this sign-in link doesn't belong to the sign-in in progress");
     }
+    let verifier = config::get_string(&ctx.host, OAUTH_VERIFIER)?;
+    // The state is single-use: a link that matched it can't be replayed.
+    forget_sign_in(ctx);
     let code = code.ok_or_else(|| anyhow!("the sign-in link has no code"))?;
-    finish_login(ctx, code, redirect_uri).await
+    finish_login(ctx, code, redirect_uri, verifier).await
 }
 
-async fn finish_login(ctx: &Ctx, code: String, redirect_uri: String) -> Result<Report> {
-    ctx.host.oauth2_login(code, redirect_uri).await?;
+async fn finish_login(
+    ctx: &Ctx,
+    code: String,
+    redirect_uri: String,
+    verifier: Option<String>,
+) -> Result<Report> {
+    ctx.host.oauth2_login(code, redirect_uri, verifier).await?;
     let info = ctx.host.get_account_info().await?;
     Report::new(&info, |info| format!("Signed in as {}.", info.name))
 }

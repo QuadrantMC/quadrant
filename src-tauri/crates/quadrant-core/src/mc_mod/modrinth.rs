@@ -1,20 +1,18 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use chrono::prelude::*;
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
 
 use crate::{
     Result,
-    models::{LocalModpack, ModLoader, ModSource},
-    modpacks::get_modpacks,
+    models::{ModLoader, ModSource},
     ports::{EventSink, SettingsStore},
 };
 
-use super::http::provider_cached_client;
+use super::http::{provider_cached_client, provider_http_client};
 use super::{
     GetModArgs, IdentifiedMod, InstalledMod, Mod, ModType, SearchCategory, SearchModsArgs,
-    UniversalModFile, get_file, get_mod_url,
+    UniversalModFile, UnknownJar, check_provider_id, get_file, get_mod_url,
 };
 
 pub(crate) fn modrinth_api_base() -> String {
@@ -199,13 +197,19 @@ fn prettify_slug(slug: &str) -> String {
 }
 
 pub async fn get_mod_modrinth(args: GetModArgs) -> Result<Mod> {
+    let id = check_provider_id(&args.id, false)?;
     let res_json: serde_json::Value = provider_cached_client()
-        .get(format!("{}/v2/project/{}", modrinth_api_base(), args.id))
+        .get(format!("{}/v2/project/{}", modrinth_api_base(), id))
         .send()
         .await?
         .json()
         .await?;
+    mod_from_project(&res_json, args)
+}
 
+/// A Modrinth project object, as `/v2/project/{id}` and the `projects` of
+/// `/v2/project/{id}/dependencies` return it, as a [`Mod`].
+fn mod_from_project(res_json: &serde_json::Value, args: GetModArgs) -> Result<Mod> {
     let mut screenshots = Vec::new();
     if let Some(gallery) = res_json["gallery"].as_array() {
         for screenshot in gallery {
@@ -268,6 +272,7 @@ pub async fn get_mod_modrinth(args: GetModArgs) -> Result<Mod> {
 }
 
 pub async fn get_mod_owners_modrinth(id: String) -> Result<Vec<String>> {
+    let id = check_provider_id(&id, false)?;
     let res_json: serde_json::Value = provider_cached_client()
         .get(format!("{}/v2/project/{}/members", modrinth_api_base(), id))
         .send()
@@ -286,6 +291,7 @@ pub async fn get_mod_owners_modrinth(id: String) -> Result<Vec<String>> {
 }
 
 pub async fn get_mod_deps_modrinth(id: String) -> Result<Vec<Mod>> {
+    let id = check_provider_id(&id, false)?;
     let res_json: serde_json::Value = provider_cached_client()
         .get(format!(
             "{}/v2/project/{}/dependencies",
@@ -296,31 +302,29 @@ pub async fn get_mod_deps_modrinth(id: String) -> Result<Vec<Mod>> {
         .await?
         .json()
         .await?;
-    let mut dependencies = Vec::new();
-    if let Some(deps) = res_json["projects"].as_array() {
-        for dependency in deps {
-            if let Some(id) = dependency["id"].as_str() {
-                dependencies.push(id.to_string());
-            }
-        }
-    }
-
+    // The response already carries every dependency's project, so no lookup
+    // per dependency is needed. One of a type Quadrant can't install (a
+    // modpack or plugin) is left out instead of failing the whole list.
     let mut mods = Vec::new();
-    for dependency in dependencies {
-        mods.push(
-            get_mod_modrinth(GetModArgs {
-                deletable: false,
-                id: dependency,
-                downloadable: true,
-                show_previous_version: false,
-                version_target: String::new(),
-                modpack: String::new(),
-                mod_loader: ModLoader::Unknown,
-                selectable: false,
-                select_url: None,
-            })
-            .await?,
-        );
+    for dependency in res_json["projects"].as_array().into_iter().flatten() {
+        let Some(dependency_id) = dependency["id"].as_str() else {
+            continue;
+        };
+        let args = GetModArgs {
+            deletable: false,
+            id: dependency_id.to_string(),
+            downloadable: true,
+            show_previous_version: false,
+            version_target: String::new(),
+            modpack: String::new(),
+            mod_loader: ModLoader::Unknown,
+            selectable: false,
+            select_url: None,
+        };
+        match mod_from_project(dependency, args) {
+            Ok(mod_) => mods.push(mod_),
+            Err(error) => log::info!("Skipping dependency {dependency_id} of {id}: {error}"),
+        }
     }
 
     Ok(mods)
@@ -354,6 +358,7 @@ impl From<ModrinthFile> for UniversalModFile {
             file_name: value.filename,
             download_url: value.url,
             sha1: value.hashes.sha1,
+            sha512: Some(value.hashes.sha512).filter(|hash| !hash.is_empty()),
             size: value.size,
         }
     }
@@ -371,6 +376,7 @@ pub async fn get_latest_mod_version_modrinth(
     mod_loader: ModLoader,
     mod_type: ModType,
 ) -> Result<Option<ModrinthFile>> {
+    let id = check_provider_id(&id, false)?;
     let mut query = vec![("game_versions", format!("[\"{}\"]", minecraft_version))];
     if mod_type == ModType::Mod {
         if let Some(loader_slug) = mod_loader.modrinth_slug() {
@@ -418,75 +424,41 @@ pub async fn download_mod_modrinth(
     get_file(file.into(), id, event_sink).await
 }
 
-pub async fn identify_modpack_modrinth(
-    mc_folder: &PathBuf,
-    modpack: String,
-) -> Result<Vec<IdentifiedMod>> {
-    log::info!("Identifying Modrinth mods in modpack \"{modpack}\"");
-    let modpack_folder = mc_folder.join("modpacks").join(&modpack);
-    let existing_modpack: Vec<LocalModpack> = get_modpacks(mc_folder, false)
+/// Looks every jar up in one `POST /v2/version_files` by its SHA-1.
+pub(crate) async fn identify_modpack_modrinth(jars: &[UnknownJar]) -> Result<Vec<IdentifiedMod>> {
+    log::info!("Identifying {} file(s) on Modrinth", jars.len());
+    let hashes: Vec<&str> = jars.iter().map(|jar| jar.sha1.as_str()).collect();
+    let versions: HashMap<String, ModrinthVersionIdentifier> = provider_http_client()
+        .post(format!("{}/v2/version_files", modrinth_api_base()))
+        .json(&serde_json::json!({ "hashes": hashes, "algorithm": "sha1" }))
+        .send()
         .await?
-        .into_iter()
-        .filter(|existing| existing.name == modpack)
-        .collect();
-    if existing_modpack.is_empty() {
-        return Err(anyhow::Error::from(crate::error::ErrorCode::ModpackMissing));
-    }
-    let existing_modpack = existing_modpack.first().unwrap();
-    let existing_files: Vec<String> = existing_modpack
-        .mods
-        .iter()
-        .map(|mod_| {
-            urlencoding::decode(&mod_.download_url)
-                .unwrap_or_default()
-                .to_string()
-                .split('/')
-                .last()
-                .unwrap_or_default()
-                .to_string()
-        })
-        .collect();
-    let unknown_files: Vec<String> = std::fs::read_dir(&modpack_folder)?
-        .filter(|file| match file {
-            Ok(file) => {
-                let file_name = file.file_name().to_string_lossy().to_string();
-                !existing_files.contains(&file_name) && file_name.ends_with(".jar")
-            }
-            Err(_) => false,
-        })
-        .map(|file| file.unwrap().file_name().to_string_lossy().to_string())
-        .collect();
+        .error_for_status()?
+        .json()
+        .await?;
 
     let mut mods = Vec::new();
-    for file in unknown_files {
-        let original_file_name = file.clone();
-        let file = modpack_folder.join(file);
-        let mut hasher = Sha1::new();
-        hasher.update(std::fs::read(file)?);
-        let hash = hex::encode(hasher.finalize());
-        let res = provider_cached_client()
-            .get(format!("{}/v2/version_file/{}", modrinth_api_base(), hash))
-            .send()
-            .await?;
-        let identifier = match res.json::<ModrinthVersionIdentifier>().await {
-            Ok(identifier) => identifier,
-            Err(_) => continue,
+    for jar in jars {
+        let Some(identifier) = versions.get(&jar.sha1) else {
+            continue;
         };
-        let file = match identifier
+        let Some(file) = identifier
             .files
             .iter()
-            .find(|file| file.hashes.sha1 == hash)
-        {
-            Some(file) => file,
-            None => continue,
+            .find(|file| file.hashes.sha1 == jar.sha1)
+        else {
+            continue;
         };
         mods.push(IdentifiedMod {
-            installed_mod: InstalledMod::minimal(
-                identifier.project_id,
-                ModSource::Modrinth,
-                file.url.clone(),
-            ),
-            file_name: original_file_name,
+            installed_mod: InstalledMod {
+                sha512: Some(jar.sha512.clone()),
+                ..InstalledMod::minimal(
+                    identifier.project_id.clone(),
+                    ModSource::Modrinth,
+                    file.url.clone(),
+                )
+            },
+            file_name: jar.file_name.clone(),
         });
     }
 
@@ -590,7 +562,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identify_modpack_modrinth_uses_shared_http_cache() {
+    async fn identify_modpack_modrinth_looks_every_jar_up_in_one_request() {
+        use sha1::{Digest, Sha1};
+
         let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
         clear_provider_http_cache().await;
 
@@ -604,42 +578,84 @@ mod tests {
         let modpack_dir = mc_folder.join("modpacks").join("alpha");
         setup_modpack(&mc_folder, "alpha");
 
-        let file_bytes = b"modrinth-jar";
-        let mut hasher = Sha1::new();
-        hasher.update(file_bytes);
-        let hash = hex::encode(hasher.finalize());
-        std::fs::write(modpack_dir.join("unknown.jar"), file_bytes).unwrap();
+        let sha1 = |bytes: &[u8]| hex::encode(Sha1::digest(bytes));
+        let (known, other) = (sha1(b"modrinth-jar"), sha1(b"other-jar"));
+        std::fs::write(modpack_dir.join("unknown.jar"), b"modrinth-jar").unwrap();
+        std::fs::write(modpack_dir.join("other.jar"), b"other-jar").unwrap();
+        std::fs::write(modpack_dir.join("notes.txt"), b"not a jar").unwrap();
 
         let version_lookup = server.mock(|when, then| {
-            when.method(GET)
-                .path(format!("/v2/version_file/{hash}").as_str());
-            then.status(200)
-                .header("cache-control", "public, max-age=300")
-                .json_body(json!({
+            when.method(POST)
+                .path("/v2/version_files")
+                .json_body_includes(json!({ "algorithm": "sha1" }).to_string());
+            then.status(200).json_body(json!({
+                known.clone(): {
                     "files": [{
-                        "hashes": {
-                            "sha512": "unused",
-                            "sha1": hash
-                        },
-                        "url": "https://example.invalid/mod.jar",
+                        "hashes": { "sha512": "unused", "sha1": known },
+                        "url": "https://cdn.modrinth.com/data/demo/versions/1/unknown.jar",
                         "filename": "unknown.jar",
                         "primary": true,
                         "size": 12
                     }],
                     "project_id": "demo-project"
-                }));
+                }
+            }));
         });
 
-        let first = identify_modpack_modrinth(&mc_folder, "alpha".to_string())
+        let jars = super::super::unknown_jars(&mc_folder, "alpha")
             .await
             .unwrap();
-        let second = identify_modpack_modrinth(&mc_folder, "alpha".to_string())
-            .await
-            .unwrap();
+        assert_eq!(jars.len(), 2);
+        assert!(jars.iter().any(|jar| jar.sha1 == other));
+        let identified = identify_modpack_modrinth(&jars).await.unwrap();
 
-        assert_eq!(first.len(), 1);
-        assert_eq!(second.len(), 1);
         version_lookup.assert_calls(1);
+        assert_eq!(identified.len(), 1);
+        assert_eq!(identified[0].file_name, "unknown.jar");
+        assert_eq!(identified[0].installed_mod.id, "demo-project");
+        assert_eq!(
+            identified[0].installed_mod.sha512.as_deref(),
+            Some(super::super::sha512_hex(b"modrinth-jar").as_str())
+        );
+
+        unsafe {
+            std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");
+        }
+        clear_provider_http_cache().await;
+    }
+
+    #[tokio::test]
+    async fn get_mod_deps_modrinth_reads_projects_from_one_response() {
+        let _guard = PROVIDER_HTTP_TEST_MUTEX.lock().await;
+        clear_provider_http_cache().await;
+
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_TEST_MODRINTH_API_BASE", server.base_url());
+        }
+        let dependencies = server.mock(|when, then| {
+            when.method(GET).path("/v2/project/root/dependencies");
+            then.status(200).json_body(json!({
+                "projects": [
+                    { "id": "lib", "title": "Lib", "slug": "lib", "project_type": "mod" },
+                    { "id": "pack", "title": "Pack", "slug": "pack", "project_type": "modpack" }
+                ],
+                "versions": []
+            }));
+        });
+        let project_lookup = server.mock(|when, then| {
+            when.method(GET).path_includes("/v2/project/lib");
+            then.status(500);
+        });
+
+        let deps = get_mod_deps_modrinth("root".to_string()).await.unwrap();
+
+        dependencies.assert_calls(1);
+        project_lookup.assert_calls(0);
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].id, "lib");
+        assert_eq!(deps[0].name, "Lib");
+        assert!(deps[0].downloadable);
 
         unsafe {
             std::env::remove_var("QUADRANT_TEST_MODRINTH_API_BASE");

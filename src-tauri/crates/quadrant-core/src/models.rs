@@ -71,6 +71,10 @@ pub struct InstalledMod {
     pub mod_icon_url: String,
     /// URL of the installed file that was selected for this mod.
     pub download_url: String,
+    /// Lowercase hex SHA-512 of the file as installed. Manifests, shares and
+    /// synced packs from older versions have none, so it stays optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha512: Option<String>,
 }
 
 impl InstalledMod {
@@ -104,6 +108,17 @@ impl InstalledMod {
             description: String::new(),
             license: String::new(),
             mod_icon_url: String::new(),
+            sha512: None,
+        }
+    }
+
+    /// The name a warning shows for this entry, which may never have been
+    /// enriched with one.
+    pub fn display_name(&self) -> &str {
+        if self.name.is_empty() {
+            &self.id
+        } else {
+            &self.name
         }
     }
 }
@@ -275,6 +290,28 @@ pub struct LocalModpack {
     pub last_synced: i64,
     /// Stable synced modpack identifier when this modpack is linked to Quadrant Sync.
     pub modpack_id: Option<String>,
+    /// Why the manifest could not be read. Such a pack lists no mods because
+    /// none could be read, not because it has none, so nothing may write or
+    /// sync it until the file parses again.
+    #[serde(default)]
+    pub manifest_error: Option<String>,
+}
+
+impl LocalModpack {
+    /// Refuses a change to a pack whose manifest could not be read, which
+    /// would otherwise replace the real file with this empty listing.
+    pub fn ensure_manifest_readable(&self) -> crate::Result<()> {
+        match &self.manifest_error {
+            Some(error) => Err(unreadable_manifest(&self.name, error)),
+            None => Ok(()),
+        }
+    }
+}
+
+pub(crate) fn unreadable_manifest(name: &str, error: impl std::fmt::Display) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Quadrant can't read the modConfigV2.json of \"{name}\" ({error}). Fix or remove it before changing or syncing this modpack."
+    )
 }
 
 impl From<LocalModpack> for InstalledModpack {
@@ -311,6 +348,7 @@ impl From<(InstalledModpack, bool, i64)> for LocalModpack {
             last_synced: modpack.2,
             modpack_id: None,
             unknown_mods: false,
+            manifest_error: None,
         }
     }
 }
@@ -375,6 +413,33 @@ pub(crate) fn is_single_path_component(name: &str) -> bool {
     !name.is_empty()
         && matches!(components.next(), Some(Component::Normal(_)))
         && components.next().is_none()
+}
+
+/// Whether `name` can be created as a file or folder on every platform without
+/// aliasing another one. Windows strips a trailing dot or space (`Survival.`
+/// opens `Survival`), maps reserved device stems (`NUL.jar`) to devices, and
+/// reads `x.jar:s` as an alternate data stream.
+pub(crate) fn is_portable_file_name(name: &str) -> bool {
+    if !is_single_path_component(name) || name.len() > 255 {
+        return false;
+    }
+    if name.ends_with(['.', ' '])
+        || name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\\'))
+    {
+        return false;
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end()
+        .to_ascii_uppercase();
+    let numbered_device = stem.len() == 4
+        && (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.as_bytes()[3].is_ascii_digit();
+    !numbered_device && !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
 }
 
 #[cfg(test)]
@@ -565,8 +630,10 @@ mod tests {
             license: "LGPL-3.0".to_string(),
             mod_icon_url: "https://example.invalid/icon.png".to_string(),
             download_url: "https://cdn.modrinth.com/sodium.jar".to_string(),
+            sha512: None,
         };
         let value = serde_json::to_value(&mod_).unwrap();
+        assert!(value.get("sha512").is_none());
         assert_eq!(value["downloadCount"], json!(7));
         assert_eq!(value["modType"], json!("Mod"));
         assert_eq!(
@@ -601,6 +668,16 @@ mod tests {
         assert_eq!(mod_.name, "");
         assert_eq!(mod_.download_count, 0);
         assert!(mod_.thumbnail_urls.is_empty());
+        assert_eq!(mod_.sha512, None);
+
+        let hashed = InstalledMod {
+            sha512: Some("ab".repeat(64)),
+            ..mod_
+        };
+        let value = serde_json::to_value(&hashed).unwrap();
+        assert_eq!(value["sha512"], json!("ab".repeat(64)));
+        let round_tripped: InstalledMod = serde_json::from_value(value).unwrap();
+        assert_eq!(round_tripped.sha512, hashed.sha512);
     }
 
     #[test]
@@ -700,6 +777,7 @@ mod tests {
             is_applied: true,
             last_synced: 99,
             modpack_id: Some("pack-1".to_string()),
+            manifest_error: None,
         };
         let installed = InstalledModpack::from(local);
         assert_eq!(installed.mod_config_version, "2");
@@ -725,6 +803,39 @@ mod tests {
         assert_eq!(local.last_synced, 7);
         assert_eq!(local.modpack_id, None);
         assert!(!local.unknown_mods);
+    }
+
+    #[test]
+    fn portable_file_names_reject_names_windows_would_alias() {
+        for name in [
+            "Survival",
+            "my mod v1.2.jar",
+            "пак",
+            "pack.v2",
+            "COM",
+            "console.jar",
+        ] {
+            assert!(is_portable_file_name(name), "{name:?}");
+        }
+        for name in [
+            "",
+            "..",
+            "a/b",
+            "a\\b",
+            "Survival.",
+            "Survival ",
+            "x.jar:s",
+            "what?",
+            "tab\there",
+            "NUL",
+            "nul.jar",
+            "Con .txt",
+            "COM1",
+            "lpt9.zip",
+            &"a".repeat(256),
+        ] {
+            assert!(!is_portable_file_name(name), "{name:?}");
+        }
     }
 
     #[test]

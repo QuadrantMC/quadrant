@@ -57,6 +57,7 @@ const TEXT_KEYS: &[&str] = &[
     "locale",
     "mcFolder",
     "oauthState",
+    "oauthVerifier",
     "prismLauncherFolder",
 ];
 

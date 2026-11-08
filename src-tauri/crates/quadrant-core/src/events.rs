@@ -29,4 +29,15 @@ pub enum BackendEvent {
     /// Signals that a settings key was changed by the backend (for example by
     /// cloud settings sync) so frontend subscribers can re-read it.
     ConfigChanged(String),
+    /// An automatic Quadrant Sync update of a local pack needs the user. It was
+    /// held back (`applied` false) because it adds or changes Online mods, or
+    /// applied with new or changed files that carry no hash. Both lists hold
+    /// mod names.
+    ModpackSyncWarning {
+        modpack_id: String,
+        name: String,
+        applied: bool,
+        online_mods: Vec<String>,
+        unverified_mods: Vec<String>,
+    },
 }

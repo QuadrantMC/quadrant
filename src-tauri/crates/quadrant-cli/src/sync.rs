@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::{
     Ctx,
-    modpack::{SHARE_URL, confirm_replace, find_modpack},
+    modpack::{SHARE_URL, confirm_replace, confirm_unverifiable_files, find_modpack},
     output::{Report, confirm, sync_date, table},
 };
 
@@ -128,9 +128,10 @@ pub async fn run(command: SyncCommand, ctx: &Ctx) -> Result<Report> {
                     .map(|local| local.name.clone())
                     .unwrap_or_else(|| synced.name.clone()),
             };
-            confirm_replace(host, &name, yes)?;
             let last_synced = u64::try_from(synced.last_synced).unwrap_or_default();
             let modpack = to_installed(synced, name.clone())?;
+            confirm_unverifiable_files(ctx, &modpack.mods, yes)?;
+            confirm_replace(host, &name, yes)?;
             let _progress = ctx.out.track_progress(host);
             host.install_modpack(modpack).await?;
             host.set_modpack_sync_date(last_synced, name.clone(), Some(modpack_id))?;
@@ -258,6 +259,7 @@ mod tests {
             is_applied: false,
             last_synced: 0,
             modpack_id: id.map(str::to_string),
+            manifest_error: None,
         }
     }
 

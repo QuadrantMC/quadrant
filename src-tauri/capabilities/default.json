@@ -7,37 +7,27 @@
     "core:default",
     "opener:default",
     "core:app:default",
-    "fs:default",
     "os:default",
     {
       "identifier": "fs:allow-watch",
       "allow": [
         {
-          "path": "$CONFIG/**"
+          "path": "$CONFIG/.minecraft"
         },
         {
-          "path": "$HOME/**/*"
+          "path": "$CONFIG/.minecraft/**"
+        },
+        {
+          "path": "$DATA/minecraft"
+        },
+        {
+          "path": "$DATA/minecraft/**"
         },
         {
           "path": "$HOME/.minecraft"
         },
         {
-          "path": "$HOME/.minecraft/modpacks"
-        },
-        {
-          "path": "$HOME/.minecraft/mods"
-        },
-        {
-          "path": "$HOME/.minecraft/mods/**"
-        },
-        {
-          "path": "$HOME/.minecraft/mods/**/*"
-        },
-        {
-          "path": "$HOME/.minecraft/modpacks/**/*"
-        },
-        {
-          "path": "$HOME/.minecraft/**/*"
+          "path": "$HOME/.minecraft/**"
         }
       ]
     },
@@ -46,7 +36,6 @@
     "dialog:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
-    "notification:default",
     "core:window:allow-start-dragging",
     "core:window:allow-hide",
     "core:window:allow-set-enabled",

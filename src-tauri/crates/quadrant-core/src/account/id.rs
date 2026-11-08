@@ -8,8 +8,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::{
     Result,
     account::{
-        account_http_client, backend_base_url, get_account_token, get_refresh_token, set_secret,
-        set_token_refresh_deadline,
+        account_http_client, backend_base_url, clear_account_token, get_account_token,
+        get_refresh_token, set_secret, set_token_refresh_deadline,
     },
     ports::SecretStore,
 };
@@ -21,6 +21,11 @@ const DEFAULT_NOTIFICATION_HISTORY_SINCE: &str = "1970-01-01T00:00:00Z";
 const EMPTY_NOTIFICATION_HISTORY_BODY: &str = "Notification history request returned an empty body";
 const EMPTY_ACCOUNT_INFO_BODY: &str = "Account info request returned an empty body";
 const EMPTY_OAUTH_BODY: &str = "OAuth2 token endpoint returned an empty body";
+
+/// One refresh at a time. The background worker and every request retried
+/// after a 401 can ask at once, and a refresh token the server rotates is
+/// spent by the first of them, so the rest would present a dead one.
+static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Account profile returned by the Quadrant backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +224,10 @@ pub struct PendingModpackUpdate {
 }
 
 /// Uses the refresh token to obtain and persist a fresh access token.
+///
+/// A refresh token the server refuses (`invalid_grant`) can never work again,
+/// so the stored credentials are cleared and the error is
+/// [`ErrorCode::SignedOut`](crate::error::ErrorCode::SignedOut).
 pub async fn try_refresh_token(
     secret_store: &impl SecretStore,
     client_id: &str,
@@ -226,6 +235,12 @@ pub async fn try_refresh_token(
     user_agent: &str,
 ) -> Result<()> {
     log::info!("Attempting token refresh");
+    let stale_access_token = secret_store.get_secret("accountToken")?;
+    let _refreshing = REFRESH_LOCK.lock().await;
+    if secret_store.get_secret("accountToken")? != stale_access_token {
+        log::info!("The access token was refreshed while this refresh waited");
+        return Ok(());
+    }
     let refresh_token = get_refresh_token(secret_store)?;
     let mut body = HashMap::new();
     body.insert("client_id", client_id);
@@ -240,7 +255,18 @@ pub async fn try_refresh_token(
         .send()
         .await?;
 
-    let res = parse_oauth_token_response(response, "Token refresh failed").await?;
+    let status = response.status();
+    let raw = response.text().await?;
+    if is_refused_grant(status, &raw) {
+        log::warn!("The refresh token was refused ({status}); clearing the session");
+        clear_account_token(secret_store)?;
+        return Err(
+            anyhow::anyhow!("Token refresh failed with {status}: the session has ended")
+                .context(crate::error::ErrorCode::SignedOut),
+        );
+    }
+    let res: OAuth2Response =
+        parse_json_body(status, &raw, "Token refresh failed", EMPTY_OAUTH_BODY)?;
     set_secret(secret_store, "accountToken", &res.access_token)?;
     if let Some(new_refresh_token) = res.refresh_token {
         set_secret(secret_store, "refreshToken", &new_refresh_token)?;
@@ -304,6 +330,40 @@ pub async fn get_account_info_with_refresh(
     parse_account_info_response(response).await
 }
 
+/// Tells the server to end this install's session (RFC 7009). Revoking the
+/// refresh token also kills the access token issued with it, so the access
+/// token is only sent when there is no refresh token. Meant to run just
+/// before the local secrets are deleted, so a failure is returned for the
+/// caller to log and ignore.
+pub async fn revoke_session(
+    secret_store: &impl SecretStore,
+    user_agent: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<()> {
+    let (token, hint) = match secret_store.get_secret("refreshToken")? {
+        Some(token) => (token, "refresh_token"),
+        None => match secret_store.get_secret("accountToken")? {
+            Some(token) => (token, "access_token"),
+            None => return Ok(()),
+        },
+    };
+    let mut body = HashMap::new();
+    body.insert("token", token.as_str());
+    body.insert("token_type_hint", hint);
+    body.insert("client_id", client_id);
+    body.insert("client_secret", client_secret);
+
+    account_http_client()
+        .post(format!("{}/oauth2/revoke", backend_base_url()))
+        .form(&body)
+        .header("User-Agent", user_agent)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
 /// Completes the OAuth authorization code flow and persists returned tokens.
 pub async fn oauth2_login(
     secret_store: &impl SecretStore,
@@ -312,6 +372,7 @@ pub async fn oauth2_login(
     client_secret: &str,
     code: String,
     redirect_uri: String,
+    code_verifier: Option<String>,
 ) -> Result<()> {
     log::info!("Starting OAuth2 login flow");
     let mut body = HashMap::new();
@@ -320,6 +381,9 @@ pub async fn oauth2_login(
     body.insert("grant_type", "authorization_code");
     body.insert("code", code.as_str());
     body.insert("redirect_uri", redirect_uri.as_str());
+    if let Some(code_verifier) = code_verifier.as_deref() {
+        body.insert("code_verifier", code_verifier);
+    }
 
     let response = account_http_client()
         .post(format!("{}/oauth2/token", backend_base_url()))
@@ -454,6 +518,14 @@ async fn parse_oauth_token_response(
     parse_json_response(response, error_prefix, EMPTY_OAUTH_BODY).await
 }
 
+/// Whether the token endpoint refused the grant itself (RFC 6749 section
+/// 5.2), as opposed to failing for a reason a later retry can get past.
+fn is_refused_grant(status: StatusCode, body: &str) -> bool {
+    status == StatusCode::BAD_REQUEST
+        && serde_json::from_str::<serde_json::Value>(body)
+            .is_ok_and(|body| body["error"] == "invalid_grant")
+}
+
 async fn parse_json_response<T: serde::de::DeserializeOwned>(
     response: reqwest::Response,
     error_prefix: &str,
@@ -461,8 +533,17 @@ async fn parse_json_response<T: serde::de::DeserializeOwned>(
 ) -> Result<T> {
     let status = response.status();
     let response_raw = response.text().await?;
+    parse_json_body(status, &response_raw, error_prefix, empty_body_error)
+}
+
+fn parse_json_body<T: serde::de::DeserializeOwned>(
+    status: StatusCode,
+    response_raw: &str,
+    error_prefix: &str,
+    empty_body_error: &str,
+) -> Result<T> {
     if !status.is_success() {
-        let body_preview = response_preview(&response_raw);
+        let body_preview = response_preview(response_raw);
         let error = anyhow::anyhow!("{} with {}: {}", error_prefix, status, body_preview);
         return Err(match crate::error::ErrorCode::from_status(status) {
             Some(code) => error.context(code),
@@ -470,6 +551,16 @@ async fn parse_json_response<T: serde::de::DeserializeOwned>(
         });
     }
 
+    parse_success_body(response_raw, error_prefix, empty_body_error)
+}
+
+/// The JSON a successful response carries, with the errors an empty or
+/// malformed body gets.
+pub(crate) fn parse_success_body<T: serde::de::DeserializeOwned>(
+    response_raw: &str,
+    error_prefix: &str,
+    empty_body_error: &str,
+) -> Result<T> {
     let trimmed = response_raw.trim();
     if trimmed.is_empty() {
         return Err(anyhow::anyhow!("{}", empty_body_error));
@@ -485,7 +576,7 @@ async fn parse_json_response<T: serde::de::DeserializeOwned>(
     })
 }
 
-fn response_preview(body: &str) -> String {
+pub(crate) fn response_preview(body: &str) -> String {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         return "<empty body>".to_string();
@@ -523,7 +614,8 @@ mod tests {
     use super::{
         Notification, NotificationCursor, NotificationWsFrame,
         get_notification_history_all_since_with_refresh,
-        get_notification_history_page_with_refresh, oauth2_login, try_refresh_token,
+        get_notification_history_page_with_refresh, oauth2_login, revoke_session,
+        try_refresh_token,
     };
     use crate::{Result, ports::SecretStore};
     use httpmock::{
@@ -587,6 +679,7 @@ mod tests {
             "client-secret",
             "authorization-code".to_string(),
             "quadrant://login".to_string(),
+            None,
         )
         .await
         .unwrap();
@@ -598,6 +691,95 @@ mod tests {
         );
         assert_eq!(store.get_secret("refreshToken").unwrap(), None);
         assert!(!crate::account::account_token_needs_refresh(&store).unwrap());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn login_sends_the_pkce_verifier_with_the_code() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let request = server.mock(|when, then| {
+            when.method(POST)
+                .path("/oauth2/token")
+                .body_includes("code_verifier=the-verifier")
+                .body_includes("code=authorization-code");
+            then.status(200).json_body(serde_json::json!({
+                "access_token": "new-account-access",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "scope": "profile:read sync:read notifications:read"
+            }));
+        });
+        let store = StatefulSecretStore::default();
+
+        oauth2_login(
+            &store,
+            "test-agent",
+            "client-id",
+            "client-secret",
+            "authorization-code".to_string(),
+            "http://127.0.0.1:4000".to_string(),
+            Some("the-verifier".to_string()),
+        )
+        .await
+        .unwrap();
+
+        request.assert();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn revoking_ends_the_session_by_its_refresh_token() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let request = server.mock(|when, then| {
+            when.method(POST)
+                .path("/oauth2/revoke")
+                .body_includes("token=the-refresh")
+                .body_includes("token_type_hint=refresh_token")
+                .body_includes("client_id=client-id");
+            then.status(200);
+        });
+        let store = StatefulSecretStore::default();
+        store.set_secret("accountToken", "the-access").unwrap();
+        store.set_secret("refreshToken", "the-refresh").unwrap();
+
+        revoke_session(&store, "test-agent", "client-id", "client-secret")
+            .await
+            .unwrap();
+
+        request.assert();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn revoking_without_a_session_makes_no_request() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let request = server.mock(|when, then| {
+            when.method(POST).path("/oauth2/revoke");
+            then.status(200);
+        });
+
+        revoke_session(
+            &StatefulSecretStore::default(),
+            "test-agent",
+            "client-id",
+            "client-secret",
+        )
+        .await
+        .unwrap();
+
+        request.assert_calls(0);
     }
 
     #[tokio::test]
@@ -633,6 +815,100 @@ mod tests {
         assert_eq!(
             store.get_secret("refreshToken").unwrap().as_deref(),
             Some("current-account-refresh")
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn refused_refresh_token_clears_the_session() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        server.mock(|when, then| {
+            when.method(POST).path("/oauth2/token");
+            then.status(400).json_body(serde_json::json!({
+                "error": "invalid_grant",
+                "error_description": "Refresh token expired"
+            }));
+        });
+        let store = StatefulSecretStore::default();
+        store.set_secret("accountToken", "old-access").unwrap();
+        store.set_secret("refreshToken", "dead-refresh").unwrap();
+
+        let error = try_refresh_token(&store, "client-id", "client-secret", "test-agent")
+            .await
+            .unwrap_err();
+
+        assert!(crate::error::is_signed_out(&error));
+        assert_eq!(store.get_secret("accountToken").unwrap(), None);
+        assert_eq!(store.get_secret("refreshToken").unwrap(), None);
+        assert!(!crate::account::account_token_needs_refresh(&store).unwrap());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn failed_refresh_for_another_reason_keeps_the_session() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        server.mock(|when, then| {
+            when.method(POST).path("/oauth2/token");
+            then.status(503).body("maintenance");
+        });
+        let store = StatefulSecretStore::default();
+        store.set_secret("refreshToken", "live-refresh").unwrap();
+
+        let error = try_refresh_token(&store, "client-id", "client-secret", "test-agent")
+            .await
+            .unwrap_err();
+
+        assert!(!crate::error::is_signed_out(&error));
+        assert_eq!(
+            store.get_secret("refreshToken").unwrap().as_deref(),
+            Some("live-refresh")
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn concurrent_refreshes_spend_the_refresh_token_once() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let rotate = server.mock(|when, then| {
+            when.method(POST)
+                .path("/oauth2/token")
+                .body_includes("refresh_token=first-refresh");
+            then.status(200)
+                .delay(std::time::Duration::from_millis(200))
+                .json_body(serde_json::json!({
+                    "access_token": "second-access",
+                    "refresh_token": "second-refresh",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                    "scope": "profile:read"
+                }));
+        });
+        let store = StatefulSecretStore::default();
+        store.set_secret("accountToken", "first-access").unwrap();
+        store.set_secret("refreshToken", "first-refresh").unwrap();
+
+        let refresh = || try_refresh_token(&store, "client-id", "client-secret", "test-agent");
+        let (first, second, third) = tokio::join!(refresh(), refresh(), refresh());
+        first.unwrap();
+        second.unwrap();
+        third.unwrap();
+
+        rotate.assert_calls(1);
+        assert_eq!(
+            store.get_secret("refreshToken").unwrap().as_deref(),
+            Some("second-refresh")
         );
     }
 

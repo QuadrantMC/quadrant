@@ -19,6 +19,7 @@ version = "26.11.1-stable"
 [workspace.dependencies]
 anyhow = "1.0.104"
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
+base64 = "0.22.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 colog = "1.4.0"
@@ -62,6 +63,7 @@ rss = "2.1.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha1 = "0.11.0"
+sha2 = "0.11.1"
 tauri = { version = "2.12.5", features = ["tray-icon", "config-json5"] }
 tauri-build = { version = "2.7.4", features = [] }
 tauri-plugin-autostart = "2.7.0"
@@ -119,37 +121,21 @@ quadrant-core = { path = "crates/quadrant-core" }
 quadrant-host = { path = "crates/quadrant-host", features = ["single-instance"] }
 
 tauri-plugin-opener = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
 anyhow = { workspace = true }
 dirs = { workspace = true }
 log = { workspace = true }
 tauri-plugin-fs = { workspace = true }
 tauri-plugin-os = { workspace = true }
-rss = { workspace = true }
-uuid = { workspace = true }
 tauri-plugin-http = { workspace = true }
 tokio = { workspace = true }
-urlencoding = { workspace = true }
 open = { workspace = true }
-futures = { workspace = true }
-tokio-tungstenite = { workspace = true }
-sha1 = { workspace = true }
-hex = { workspace = true }
-colog = { workspace = true }
 tauri-plugin-deep-link = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
-keyring-core = { workspace = true }
 tauri-plugin-clipboard-manager = { workspace = true }
 tauri-plugin-notification = { workspace = true }
 tauri-plugin-persisted-scope = { workspace = true }
-http-cache-reqwest = { workspace = true }
-reqwest-middleware = { workspace = true }
-reqwest = { workspace = true }
-once_cell = { workspace = true }
 tauri-plugin-oauth = { workspace = true }
-zip = { workspace = true }
 url = { workspace = true }
 
 
@@ -157,15 +143,6 @@ url = { workspace = true }
 tauri-plugin-autostart = { workspace = true }
 tauri-plugin-cli = { workspace = true }
 tauri-plugin-updater = { workspace = true }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-native-keyring-store = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-apple-native-keyring-store = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-dbus-secret-service-keyring-store = { workspace = true }
 
 [profile.dev]
 opt-level = 0

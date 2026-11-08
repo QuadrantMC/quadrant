@@ -6,7 +6,10 @@ use quadrant_core::account::id::{AccountInfo, Notification};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::{Ctx, config, output::Report};
+use crate::{
+    Ctx, config,
+    output::{Report, plain},
+};
 
 const MODPACK_SYNC: &str = "modpack_sync";
 const INVITE_TO_SYNC: &str = "invite_to_sync";
@@ -144,8 +147,15 @@ async fn watch(ctx: &Ctx) -> Result<Report> {
                         if ctx.out.json {
                             println!("{}", serde_json::to_string(&shown)?);
                         } else {
-                            println!("{}\n", describe(&shown));
+                            println!("{}\n", plain(&describe(&shown)));
                         }
+                    }
+                }
+                Ok(event) if event.event == "modpackSyncWarning" => {
+                    if ctx.out.json {
+                        println!("{}", serde_json::to_string(&event)?);
+                    } else if let Some(text) = sync_warning_text(&event.payload) {
+                        println!("{}\n", plain(&text));
                     }
                 }
                 Ok(_) | Err(RecvError::Lagged(_)) => {}
@@ -155,6 +165,31 @@ async fn watch(ctx: &Ctx) -> Result<Report> {
     }
     host.stop_background_workers().await?;
     Ok(Report::streamed())
+}
+
+/// What a held-back or unverified automatic modpack update tells the user.
+fn sync_warning_text(payload: &serde_json::Value) -> Option<String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Warning {
+        modpack_id: String,
+        name: String,
+        applied: bool,
+        unverified_mods: Vec<String>,
+    }
+    let warning: Warning = serde_json::from_value(payload.clone()).ok()?;
+    Some(if warning.applied {
+        format!(
+            "Updated {}, but {} file(s) couldn't be verified.",
+            warning.name,
+            warning.unverified_mods.len()
+        )
+    } else {
+        format!(
+            "An update to {} needs your review. Install it with `quadrantmc sync pull {}`.",
+            warning.name, warning.modpack_id
+        )
+    })
 }
 
 fn show(notification: Notification) -> Shown {
@@ -264,6 +299,28 @@ pub fn invite(notification: &Notification) -> Option<Invite> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn sync_warnings_say_whether_the_update_waits_for_the_user() {
+        let warning = |applied: bool| {
+            json!({
+                "modpackId": "pack-1",
+                "name": "Survival",
+                "applied": applied,
+                "onlineMods": ["Link"],
+                "unverifiedMods": ["Link", "Lithium"],
+            })
+        };
+        assert_eq!(
+            sync_warning_text(&warning(false)).unwrap(),
+            "An update to Survival needs your review. Install it with `quadrantmc sync pull pack-1`."
+        );
+        assert_eq!(
+            sync_warning_text(&warning(true)).unwrap(),
+            "Updated Survival, but 2 file(s) couldn't be verified."
+        );
+        assert_eq!(sync_warning_text(&json!({})), None);
+    }
 
     fn notification(message: serde_json::Value, kind: Option<&str>) -> Notification {
         Notification {

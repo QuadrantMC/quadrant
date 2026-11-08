@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, Once, OnceLock},
+    sync::{Arc, Mutex, Once},
     time::Duration,
 };
 
@@ -11,7 +11,7 @@ pub mod app_paths;
 pub mod single_instance;
 pub mod updates;
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use futures::StreamExt;
 use keyring_core::{Entry, Error as KeyringError, set_default_store};
 use quadrant_core::{
@@ -21,7 +21,7 @@ use quadrant_core::{
         id::{
             AccountInfo, Notification, NotificationCursor, NotificationWsFrame,
             get_account_info_with_refresh, get_notification_history_all_since_with_refresh,
-            oauth2_login, read_notification, try_refresh_token,
+            oauth2_login, read_notification, revoke_session, try_refresh_token,
         },
         quadrant_settings_sync::{self, SettingsPull},
         quadrant_share::{
@@ -31,7 +31,6 @@ use quadrant_core::{
             SyncedModpack, answer_invite, delete_synced_modpack, get_synced_modpacks,
             invite_member, kick_member,
         },
-        set_secret,
     },
     config::{ensure_default_app_config, get_mc_folder},
     content::{
@@ -39,7 +38,7 @@ use quadrant_core::{
         content_location_header, content_subfolder, copy_content_files, delete_content_files,
         parse_location_id, prism_location_id,
     },
-    error::is_cloud_sync_conflict,
+    error::{is_cloud_sync_conflict, is_signed_out},
     events::BackendEvent,
     mc_mod::{
         GetModArgs, GlobalSearchModsArgs, IdentifiedMod, MinecraftVersion, Mod, ModType,
@@ -48,8 +47,9 @@ use quadrant_core::{
     },
     models::{Article, InstalledMod, InstalledModpack, LocalModpack, ModLoader, ModSource},
     modpacks::{
-        apply_modpack, create_modpack, delete_mod, delete_modpack, export_modpack_to, get_modpacks,
-        install_modpack, register_mod, set_modpack_sync_date, update_modpack,
+        apply_modpack, backfill_mod_hashes, check_manifest_readable, create_modpack, delete_mod,
+        delete_modpack, export_modpack_to, get_modpack, get_modpacks, install_modpack,
+        register_mod, review_incoming_mods, set_modpack_sync_date, update_modpack,
     },
     ports::{EventSink, SecretStore, SettingsStore},
     prism::{self, PrismInstance, PrismSyncPlan},
@@ -90,11 +90,21 @@ const SETTINGS_SYNC_INTERVAL_SECS: u64 = 120;
 /// this interval, so a short poll just bounds how late a refresh can fire.
 const TOKEN_REFRESH_CHECK_INTERVAL_SECS: u64 = 60;
 const WS_REPLAY_LIMIT: usize = 500;
+const NOTIFICATION_HISTORY_LIMIT: usize = WS_REPLAY_LIMIT;
+/// How long signing out waits for the server before it deletes the tokens anyway.
+const REVOKE_TIMEOUT: Duration = Duration::from_secs(5);
+const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// The API pings every 30 seconds, so this much silence means the connection
+/// is gone even though no error reached the socket.
+const WS_READ_TIMEOUT: Duration = Duration::from_secs(90);
 const REFRESH_SYNCED_MODPACKS_EVENT: &str = "refreshSyncedModpacks";
+const MODPACK_SYNC_WARNING_EVENT: &str = "modpackSyncWarning";
 const MODPACK_SYNC_NOTIFICATION_TYPE: &str = "modpack_sync";
 const MODPACK_MEMBERSHIP_NOTIFICATION_TYPE: &str = "modpack_membership";
 static LOGGER_INIT: Once = Once::new();
-static KEYRING_STORE_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+/// Only success is remembered: the Secret Service can come up after an app
+/// that starts with the session, and a later call should find it.
+static KEYRING_STORE_READY: Mutex<bool> = Mutex::new(false);
 
 #[derive(Debug, Clone)]
 pub struct QuadrantHostOptions {
@@ -105,7 +115,6 @@ pub struct QuadrantHostOptions {
     pub oauth_client_secret: String,
     pub quadrant_api_key: String,
     pub config_store_name: String,
-    pub update_store_name: String,
     pub keyring_service_name: String,
     pub app_version: String,
     pub os_name: String,
@@ -127,7 +136,6 @@ impl QuadrantHostOptions {
             oauth_client_secret: oauth_client_secret.into(),
             quadrant_api_key: quadrant_api_key.into(),
             config_store_name: "config.json".to_string(),
-            update_store_name: "updateConfig.json".to_string(),
             keyring_service_name: KEYRING_SERVICE.to_string(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             os_name: std::env::consts::OS.to_uppercase(),
@@ -150,7 +158,6 @@ pub struct QuadrantHost {
 struct QuadrantHostInner {
     options: QuadrantHostOptions,
     config_store: JsonFileStore,
-    _update_store: JsonFileStore,
     secret_store: KeyringSecretStore,
     event_sink: HostEventBridge,
     runtime_state: AsyncMutex<HostRuntimeState>,
@@ -174,86 +181,170 @@ struct HostRuntimeState {
 #[derive(Clone)]
 struct JsonFileStore {
     path: PathBuf,
-    values: Arc<Mutex<HashMap<String, Value>>>,
+    cached: Arc<Mutex<CachedValues>>,
 }
+
+/// The values as last read or written, with the file's stamp at that time.
+#[derive(Default)]
+struct CachedValues {
+    values: HashMap<String, Value>,
+    stamp: Option<FileStamp>,
+}
+
+/// What a file's metadata says about its contents. `None` when the file
+/// does not exist.
+type FileStamp = Option<(std::time::SystemTime, u64)>;
+
+/// A file changed this recently may change again within the timestamp
+/// granularity of some file systems, so its stamp proves nothing yet.
+const STAMP_SETTLE_TIME: Duration = Duration::from_secs(2);
 
 impl JsonFileStore {
     fn new(path: PathBuf) -> Result<Self> {
-        let values = Self::read_values_from_disk(&path)?;
-        Ok(Self {
+        let store = Self {
             path,
-            values: Arc::new(Mutex::new(values)),
-        })
+            cached: Arc::new(Mutex::new(CachedValues::default())),
+        };
+        let values = store.load_or_set_aside()?;
+        store.lock_cached()?.values = values;
+        Ok(store)
     }
 
-    fn read_values_from_disk(path: &PathBuf) -> Result<HashMap<String, Value>> {
-        if !path.exists() {
-            return Ok(HashMap::new());
-        }
-
-        let raw = fs::read_to_string(path)?;
-        serde_json::from_str::<HashMap<String, Value>>(&raw)
-            .map_err(|error| anyhow!("failed to parse {}: {error}", path.display()))
-    }
-
-    fn reload(&self, values: &mut HashMap<String, Value>) -> Result<()> {
-        // Do not let a failed reload turn the next write into an overwrite of
-        // disk contents using a stale in-memory snapshot.
-        *values = Self::read_values_from_disk(&self.path)?;
-        Ok(())
-    }
-
-    fn delete_key(&self, key: &str) -> Result<()> {
-        let mut values = self
-            .values
+    fn lock_cached(&self) -> Result<std::sync::MutexGuard<'_, CachedValues>> {
+        self.cached
             .lock()
-            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))?;
-        self.reload(&mut values)?;
-        values.remove(key);
-        self.persist(&values)
+            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))
     }
 
-    fn persist(&self, values: &HashMap<String, Value>) -> Result<()> {
+    /// The values on disk. A file that does not parse (a bad hand edit) is
+    /// moved aside to `<name>.corrupt-<unix ms>` and the store starts empty, so
+    /// the host fills in defaults instead of failing to start.
+    fn load_or_set_aside(&self) -> Result<HashMap<String, Value>> {
+        let error = match Self::read_values_from_disk(&self.path) {
+            Ok(values) => return Ok(values),
+            Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => error,
+            Err(error) => return Err(error),
+        };
+        let _lock = self.lock_file()?;
+        // Another process starting at the same time may have done this already.
+        match Self::read_values_from_disk(&self.path) {
+            Ok(values) => return Ok(values),
+            Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {}
+            Err(error) => return Err(error),
+        }
+        let file_name = self
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let backup = self.path.with_file_name(format!(
+            "{file_name}.corrupt-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+        fs::rename(&self.path, &backup)?;
+        log::error!(
+            "{error:#}. Moved it to {} and started from the defaults",
+            backup.display()
+        );
+        Ok(HashMap::new())
+    }
+
+    fn read_values_from_disk(path: &Path) -> Result<HashMap<String, Value>> {
+        let raw = match fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(HashMap::new());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        serde_json::from_str::<HashMap<String, Value>>(&raw)
+            .with_context(|| format!("failed to parse {}", path.display()))
+    }
+
+    /// Held around every reload-modify-persist, so a write from another
+    /// process sharing the data folder is never overwritten with an older copy.
+    fn lock_file(&self) -> Result<fs::File> {
+        let mut lock_path = self.path.clone().into_os_string();
+        lock_path.push(".lock");
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let temp_path = self.path.with_extension(format!("{}.tmp", Uuid::now_v7()));
-        fs::write(
-            &temp_path,
-            serde_json::to_vec_pretty(&Value::Object(values.clone().into_iter().collect()))?,
+        Ok(quadrant_core::modpacks::lock_file(Path::new(&lock_path))?)
+    }
+
+    fn stamp(&self) -> Result<FileStamp> {
+        match fs::metadata(&self.path) {
+            Ok(metadata) => Ok(Some((metadata.modified()?, metadata.len()))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn reload(&self, cached: &mut CachedValues) -> Result<()> {
+        // The stamp is taken first, so a write landing during the read leaves
+        // a stamp that no longer matches and the next read loads it.
+        let stamp = self.stamp()?;
+        // Do not let a failed reload turn the next write into an overwrite of
+        // disk contents using a stale in-memory snapshot.
+        cached.values = Self::read_values_from_disk(&self.path)?;
+        cached.stamp = Some(stamp);
+        Ok(())
+    }
+
+    /// Reloads only when the file changed since it was last read or written,
+    /// so the many settings reads per command don't each parse config.json.
+    fn refresh(&self, cached: &mut CachedValues) -> Result<()> {
+        let stamp = self.stamp()?;
+        let settled = stamp.is_none_or(|(modified, _)| {
+            modified.elapsed().is_ok_and(|age| age >= STAMP_SETTLE_TIME)
+        });
+        if settled && cached.stamp == Some(stamp) {
+            return Ok(());
+        }
+        self.reload(cached)
+    }
+
+    fn delete_key(&self, key: &str) -> Result<()> {
+        let mut cached = self.lock_cached()?;
+        let _lock = self.lock_file()?;
+        self.reload(&mut cached)?;
+        cached.values.remove(key);
+        self.persist(&mut cached)
+    }
+
+    fn persist(&self, cached: &mut CachedValues) -> Result<()> {
+        quadrant_core::modpacks::write_file_atomically(
+            &self.path,
+            serde_json::to_vec_pretty(&Value::Object(cached.values.clone().into_iter().collect()))?,
         )?;
-        fs::rename(temp_path, &self.path)?;
+        cached.stamp = Some(self.stamp()?);
         Ok(())
     }
 }
 
 impl SettingsStore for JsonFileStore {
     fn get_value(&self, key: &str) -> Result<Option<Value>> {
-        let mut values = self
-            .values
-            .lock()
-            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))?;
-        self.reload(&mut values)?;
-        Ok(values.get(key).cloned())
+        let mut cached = self.lock_cached()?;
+        self.refresh(&mut cached)?;
+        Ok(cached.values.get(key).cloned())
     }
 
     fn set_value(&self, key: &str, value: Value) -> Result<()> {
-        let mut values = self
-            .values
-            .lock()
-            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))?;
-        self.reload(&mut values)?;
-        values.insert(key.to_string(), value);
-        self.persist(&values)
+        let mut cached = self.lock_cached()?;
+        let _lock = self.lock_file()?;
+        self.reload(&mut cached)?;
+        cached.values.insert(key.to_string(), value);
+        self.persist(&mut cached)
     }
 
     fn entries(&self) -> Result<Vec<(String, Value)>> {
-        let mut values = self
+        let mut cached = self.lock_cached()?;
+        self.refresh(&mut cached)?;
+        Ok(cached
             .values
-            .lock()
-            .map_err(|_| anyhow::Error::from(quadrant_core::error::ErrorCode::Busy))?;
-        self.reload(&mut values)?;
-        Ok(values
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect())
@@ -290,11 +381,21 @@ impl SecretStore for KeyringSecretStore {
 }
 
 fn ensure_keyring_store() -> Result<()> {
-    match KEYRING_STORE_INIT.get_or_init(|| init_keyring_store().map_err(|error| error.to_string()))
-    {
-        Ok(()) => Ok(()),
-        Err(error) => Err(anyhow!("failed to initialize keyring store: {error}").into()),
+    ensure_initialized(&KEYRING_STORE_READY, init_keyring_store)
+}
+
+fn ensure_initialized<E: std::fmt::Display>(
+    ready: &Mutex<bool>,
+    init: impl FnOnce() -> std::result::Result<(), E>,
+) -> Result<()> {
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !*ready {
+        init().map_err(|error| anyhow!("failed to initialize keyring store: {error}"))?;
+        *ready = true;
     }
+    Ok(())
 }
 
 fn init_keyring_store() -> std::result::Result<(), KeyringError> {
@@ -384,6 +485,22 @@ impl EventSink for HostEventBridge {
             }
             BackendEvent::RecheckAccountToken => self.emit("recheckAccountToken", Value::Null),
             BackendEvent::ConfigChanged(key) => self.emit("configChanged", key),
+            BackendEvent::ModpackSyncWarning {
+                modpack_id,
+                name,
+                applied,
+                online_mods,
+                unverified_mods,
+            } => self.emit(
+                MODPACK_SYNC_WARNING_EVENT,
+                serde_json::json!({
+                    "modpackId": modpack_id,
+                    "name": name,
+                    "applied": applied,
+                    "onlineMods": online_mods,
+                    "unverifiedMods": unverified_mods,
+                }),
+            ),
         }
     }
 }
@@ -394,14 +511,9 @@ impl QuadrantHost {
             colog::init();
         });
         fs::create_dir_all(&options.data_dir)?;
-        if let Some(api_base_url) = &options.api_base_url {
-            unsafe {
-                std::env::set_var("QUADRANT_API_BASE_URL", api_base_url);
-            }
-        }
+        quadrant_core::account::set_backend_base_url_override(options.api_base_url.as_deref())?;
 
         let config_store = JsonFileStore::new(options.data_dir.join(&options.config_store_name))?;
-        let update_store = JsonFileStore::new(options.data_dir.join(&options.update_store_name))?;
         ensure_default_app_config(&config_store)?;
 
         quadrant_core::models::set_quadrant_version(options.app_version.clone());
@@ -422,7 +534,6 @@ impl QuadrantHost {
                 }),
                 worker_handles: AsyncMutex::new(WorkerHandles::default()),
                 config_store,
-                _update_store: update_store,
                 options,
             }),
         })
@@ -524,6 +635,32 @@ impl QuadrantHost {
         get_modpacks(&self.get_minecraft_folder()?, hide_free).await
     }
 
+    /// The listing of just the pack `name` (empty when it does not exist), for
+    /// the core functions that look one pack up in a listing.
+    async fn modpack_listing(&self, name: &str) -> Result<Vec<LocalModpack>> {
+        Ok(get_modpack(&self.get_minecraft_folder()?, name)
+            .await?
+            .into_iter()
+            .collect())
+    }
+
+    /// Records the file hashes older manifests lack. Hosts run it in the
+    /// background at every launch; see [`backfill_mod_hashes`].
+    pub async fn backfill_mod_hashes(&self) -> Result<usize> {
+        backfill_mod_hashes(&self.get_minecraft_folder()?).await
+    }
+
+    /// Prunes the shared mod cache by the `cacheKeepAlive` setting (days).
+    /// Hosts run it once in the background at launch; lookups never prune.
+    pub async fn prune_mod_cache(&self) -> Result<()> {
+        let keep_alive_days = self
+            .inner
+            .config_store
+            .get_i64("cacheKeepAlive")?
+            .unwrap_or(quadrant_core::config::default_app_config().cache_keep_alive);
+        quadrant_core::mc_mod::cache::init_cache(keep_alive_days).await
+    }
+
     pub fn frontend_apply_modpack(&self, name: String) -> Result<()> {
         apply_modpack(&self.get_minecraft_folder()?, &name)
     }
@@ -582,10 +719,8 @@ impl QuadrantHost {
     /// The named modpack from the on-disk listing, which is where the version
     /// and loader an instance is synced to come from.
     async fn require_modpack(&self, name: &str) -> Result<LocalModpack> {
-        self.get_modpacks(false)
+        get_modpack(&self.get_minecraft_folder()?, name)
             .await?
-            .into_iter()
-            .find(|modpack| modpack.name == name)
             .ok_or_else(|| anyhow::Error::from(ErrorCode::ModpackMissing))
     }
 
@@ -596,6 +731,7 @@ impl QuadrantHost {
     ) -> Result<()> {
         let instances_dir = self.require_prism_instances_dir()?;
         let modpack = self.require_modpack(&name).await?;
+        modpack.ensure_manifest_readable()?;
 
         let instance_dir = prism::resolve_instance_dir(&instances_dir, &instance_id)?;
         let pack = prism::read_pack_manifest(&instance_dir)?;
@@ -817,7 +953,7 @@ impl QuadrantHost {
     pub async fn delete_mod(&self, modpack_name: String, mod_id: String) -> Result<()> {
         let modpack = delete_mod(
             &self.get_minecraft_folder()?,
-            &self.get_modpacks(false).await?,
+            &self.modpack_listing(&modpack_name).await?,
             &modpack_name,
             &mod_id,
         )?;
@@ -842,7 +978,7 @@ impl QuadrantHost {
         };
         let modpack = update_modpack(
             &mc_folder,
-            &self.get_modpacks(false).await?,
+            &self.modpack_listing(&modpack_source).await?,
             &modpack_source,
             name,
             version,
@@ -860,7 +996,7 @@ impl QuadrantHost {
     ) -> Result<()> {
         create_modpack(
             &self.get_minecraft_folder()?,
-            &self.get_modpacks(false).await?,
+            &self.modpack_listing(&name).await?,
             &name,
             &version,
             mod_loader,
@@ -869,7 +1005,7 @@ impl QuadrantHost {
 
     pub async fn delete_modpack(&self, name: String) -> Result<()> {
         let mc_folder = self.get_minecraft_folder()?;
-        let modpacks = self.get_modpacks(false).await?;
+        let modpacks = self.modpack_listing(&name).await?;
         // Unlinked first: once the folder is gone an instance links to nothing,
         // has no mods, and reports no modpack to unlink it from.
         self.detach_prism_instances_linked_to(&mc_folder, &name);
@@ -879,7 +1015,7 @@ impl QuadrantHost {
     pub async fn register_mod(&self, mod_: InstalledMod, modpack: String) -> Result<()> {
         register_mod(
             &self.get_minecraft_folder()?,
-            &self.get_modpacks(false).await?,
+            &self.modpack_listing(&modpack).await?,
             mod_,
             &modpack,
         )
@@ -897,12 +1033,12 @@ impl QuadrantHost {
     }
 
     pub async fn export_modpack_to(&self, modpack: String, destination: PathBuf) -> Result<()> {
-        export_modpack_to(
-            &self.get_minecraft_folder()?,
-            &modpack,
-            &destination,
-            &self.inner.event_sink,
-        )
+        let mc_folder = self.get_minecraft_folder()?;
+        let event_sink = self.inner.event_sink.clone();
+        tokio::task::spawn_blocking(move || {
+            export_modpack_to(&mc_folder, &modpack, &destination, &event_sink)
+        })
+        .await?
     }
 
     pub fn set_modpack_sync_date(
@@ -942,12 +1078,7 @@ impl QuadrantHost {
         mod_loader: ModLoader,
         modpack_name: String,
     ) -> Result<Option<Mod>> {
-        let modpack = self
-            .get_modpacks(false)
-            .await?
-            .into_iter()
-            .find(|modpack| modpack.name == modpack_name)
-            .ok_or_else(|| anyhow::Error::from(quadrant_core::error::ErrorCode::ModpackMissing))?;
+        let modpack = self.require_modpack(&modpack_name).await?;
         let show_unupgradeable_mods = self
             .inner
             .config_store
@@ -1062,15 +1193,25 @@ impl QuadrantHost {
         get_mod_deps_curseforge(id).await
     }
 
-    pub fn set_secret(&self, key: String, value: String) -> Result<()> {
-        set_secret(&self.inner.secret_store, &key, &value)
-    }
-
-    pub fn clear_account_token(&self) -> Result<()> {
-        clear_account_token(&self.inner.secret_store)
-    }
-
-    pub fn logout(&self) -> Result<()> {
+    /// Signs out: asks the server to end the session, then deletes the local
+    /// tokens. A server that can't be reached or refuses doesn't keep the user
+    /// signed in here.
+    pub async fn clear_account_token(&self) -> Result<()> {
+        let revoked = tokio::time::timeout(
+            REVOKE_TIMEOUT,
+            revoke_session(
+                &self.inner.secret_store,
+                &self.inner.options.user_agent,
+                &self.inner.options.oauth_client_id,
+                &self.inner.options.oauth_client_secret,
+            ),
+        )
+        .await;
+        match revoked {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => log::warn!("Couldn't revoke the session on sign-out: {error}"),
+            Err(_) => log::warn!("Revoking the session on sign-out timed out"),
+        }
         clear_account_token(&self.inner.secret_store)
     }
 
@@ -1088,7 +1229,12 @@ impl QuadrantHost {
         .await
     }
 
-    pub async fn oauth2_login(&self, code: String, redirect_uri: String) -> Result<()> {
+    pub async fn oauth2_login(
+        &self,
+        code: String,
+        redirect_uri: String,
+        code_verifier: Option<String>,
+    ) -> Result<()> {
         oauth2_login(
             &self.inner.secret_store,
             &self.inner.options.user_agent,
@@ -1096,6 +1242,7 @@ impl QuadrantHost {
             &self.inner.options.oauth_client_secret,
             code,
             redirect_uri,
+            code_verifier,
         )
         .await?;
         self.inner
@@ -1181,6 +1328,8 @@ impl QuadrantHost {
     }
 
     pub async fn sync_modpack(&self, modpack: LocalModpack, overwrite: bool) -> Result<()> {
+        modpack.ensure_manifest_readable()?;
+        check_manifest_readable(&self.get_minecraft_folder()?, &modpack.name)?;
         let connection_id = {
             let runtime = self.inner.runtime_state.lock().await;
             runtime.notification_connection_id.clone()
@@ -1237,12 +1386,8 @@ impl QuadrantHost {
         &self,
         modpack_name: String,
     ) -> Result<QuadrantShareSubmissionResponse> {
-        let modpack = self
-            .get_modpacks(false)
-            .await?
-            .into_iter()
-            .find(|modpack| modpack.name == modpack_name)
-            .ok_or_else(|| anyhow::Error::from(quadrant_core::error::ErrorCode::ModpackMissing))?;
+        let modpack = self.require_modpack(&modpack_name).await?;
+        modpack.ensure_manifest_readable()?;
         self.share_modpack_raw(modpack.into()).await
     }
 
@@ -1375,7 +1520,6 @@ impl QuadrantHost {
             "get_mod_modrinth",
             "get_mod_owners_modrinth",
             "get_mod_deps_modrinth",
-            "set_secret",
             "clear_account_token",
             "get_account_info",
             "oauth2_login",
@@ -1602,19 +1746,15 @@ impl QuadrantHost {
                 let args: IdArgs = from_value(payload)?;
                 to_value(self.get_mod_deps_curseforge(args.id).await?)
             }
-            "set_secret" => {
-                let args: SetSecretArgs = from_value(payload)?;
-                self.set_secret(args.key, args.value)?;
-                Ok(Value::Null)
-            }
             "clear_account_token" => {
-                self.clear_account_token()?;
+                self.clear_account_token().await?;
                 Ok(Value::Null)
             }
             "get_account_info" => to_value(self.get_account_info().await?),
             "oauth2_login" => {
                 let args: OAuthLoginArgs = from_value(payload)?;
-                self.oauth2_login(args.code, args.redirect_uri).await?;
+                self.oauth2_login(args.code, args.redirect_uri, args.code_verifier)
+                    .await?;
                 Ok(Value::Null)
             }
             "oauth2_client_id" => to_value(self.oauth2_client_id()),
@@ -1751,12 +1891,14 @@ impl QuadrantHost {
     }
 
     async fn notification_worker_loop(&self) {
+        let mut reconnect_attempt = 0;
         loop {
             if let Err(error) = self.bootstrap_notifications().await {
                 log::error!("Notification bootstrap failed: {error}");
             }
 
-            if let Err(error) = self.run_notification_socket().await {
+            let mut connected_for = None;
+            if let Err(error) = self.run_notification_socket(&mut connected_for).await {
                 log::warn!("Notification socket cycle ended: {error}");
             }
 
@@ -1764,13 +1906,8 @@ impl QuadrantHost {
                 log::warn!("Notification catch-up failed after socket cycle: {error}");
             }
 
-            let delay = {
-                let mut state = self.inner.runtime_state.lock().await;
-                state.notification_state.reconnect_attempt =
-                    state.notification_state.reconnect_attempt.saturating_add(1);
-                reconnect_delay(state.notification_state.reconnect_attempt)
-            };
-            tokio::time::sleep(delay).await;
+            reconnect_attempt = next_reconnect_attempt(reconnect_attempt, connected_for);
+            tokio::time::sleep(reconnect_delay(reconnect_attempt)).await;
         }
     }
 
@@ -1790,10 +1927,21 @@ impl QuadrantHost {
     async fn token_refresh_loop(&self) {
         let mut interval =
             tokio::time::interval(Duration::from_secs(TOKEN_REFRESH_CHECK_INTERVAL_SECS));
+        let mut failures = 0;
+        let mut ticks_to_skip = 0;
         loop {
             interval.tick().await;
-            if let Err(error) = self.refresh_account_token_if_due().await {
-                log::warn!("Proactive token refresh worker failed: {error}");
+            if ticks_to_skip > 0 {
+                ticks_to_skip -= 1;
+                continue;
+            }
+            match self.refresh_account_token_if_due().await {
+                Ok(()) => failures = 0,
+                Err(error) => {
+                    failures += 1;
+                    ticks_to_skip = token_refresh_ticks_to_skip(failures);
+                    log::warn!("Proactive token refresh worker failed: {error}");
+                }
             }
         }
     }
@@ -1808,18 +1956,22 @@ impl QuadrantHost {
     }
 
     /// Forces an access token refresh using the stored refresh token and signals
-    /// the frontend to re-read account state.
+    /// the frontend to re-read account state, also when the refresh ended the
+    /// session.
     pub async fn refresh_account_token(&self) -> Result<()> {
-        try_refresh_token(
+        let refreshed = try_refresh_token(
             &self.inner.secret_store,
             &self.inner.options.oauth_client_id,
             &self.inner.options.oauth_client_secret,
             &self.inner.options.user_agent,
         )
-        .await?;
-        self.inner
-            .event_sink
-            .emit("recheckAccountToken", Value::Null)
+        .await;
+        if refreshed.is_ok() || refreshed.as_ref().is_err_and(is_signed_out) {
+            self.inner
+                .event_sink
+                .emit("recheckAccountToken", Value::Null)?;
+        }
+        refreshed
     }
 
     async fn bootstrap_notifications(&self) -> Result<()> {
@@ -1871,11 +2023,12 @@ impl QuadrantHost {
             }
         }
 
-        self.set_reconnect_attempt(0).await;
         Ok(())
     }
 
-    async fn run_notification_socket(&self) -> Result<()> {
+    /// Runs one socket connection until it fails, recording in `connected_for`
+    /// how long it stayed open once the handshake succeeded.
+    async fn run_notification_socket(&self, connected_for: &mut Option<Duration>) -> Result<()> {
         let token = quadrant_core::account::get_account_token(&self.inner.secret_store)?;
         let (cursor, connection_id) = {
             let state = self.inner.runtime_state.lock().await;
@@ -1894,11 +2047,28 @@ impl QuadrantHost {
             .headers_mut()
             .insert("User-Agent", self.inner.options.user_agent.parse()?);
 
-        let (mut socket, _) = connect_async(request).await?;
-        self.set_reconnect_attempt(0).await;
+        let (mut socket, _) = tokio::time::timeout(WS_CONNECT_TIMEOUT, connect_async(request))
+            .await
+            .map_err(|_| anyhow!("notification websocket connect timed out"))??;
+        let connected_at = tokio::time::Instant::now();
+        let result = self.read_notification_frames(&mut socket).await;
+        *connected_for = Some(connected_at.elapsed());
+        result
+    }
 
-        while let Some(frame) = socket.next().await {
-            match frame? {
+    async fn read_notification_frames(
+        &self,
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> Result<()> {
+        loop {
+            let frame = match tokio::time::timeout(WS_READ_TIMEOUT, socket.next()).await {
+                Ok(Some(frame)) => frame?,
+                Ok(None) => return Err(anyhow!("notification websocket stream ended")),
+                Err(_) => return Err(anyhow!("notification websocket went silent")),
+            };
+            match frame {
                 Message::Text(payload) => self.handle_notification_ws_frame(&payload).await?,
                 Message::Close(frame) => {
                     let reason = frame
@@ -1909,8 +2079,6 @@ impl QuadrantHost {
                 Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {}
             }
         }
-
-        Err(anyhow!("notification websocket stream ended"))
     }
 
     async fn handle_notification_ws_frame(&self, payload: &str) -> Result<()> {
@@ -2019,16 +2187,12 @@ impl QuadrantHost {
             .get_bool("autoQuadrantSync")?
             .unwrap_or(false);
 
-        if auto_quadrant_sync {
-            let local_modpack = self.resolve_local_modpack_for_sync(&synced_modpack).await?;
-            let local_modpack = self
-                .maybe_backfill_local_modpack_id(local_modpack, &synced_modpack)
+        if auto_quadrant_sync
+            && let Some(local_modpack) =
+                self.resolve_local_modpack_for_sync(&synced_modpack).await?
+        {
+            self.maybe_apply_remote_modpack_update(&local_modpack, &synced_modpack)
                 .await?;
-
-            if let Some(local_modpack) = local_modpack {
-                self.maybe_apply_remote_modpack_update(&local_modpack, &synced_modpack)
-                    .await?;
-            }
         }
 
         self.inner
@@ -2058,53 +2222,18 @@ impl QuadrantHost {
             .ok_or_else(|| anyhow!("modpack sync fallback fetch returned no modpack"))
     }
 
+    /// Only a local pack recording the synced pack's id takes its updates
+    /// unasked. A pack that merely shares its name may be a different one.
     async fn resolve_local_modpack_for_sync(
         &self,
         synced_modpack: &SyncedModpack,
     ) -> Result<Option<LocalModpack>> {
-        let modpacks = get_modpacks(&self.get_minecraft_folder()?, true).await?;
-
-        if let Some(local_modpack) = modpacks
-            .iter()
+        Ok(get_modpacks(&self.get_minecraft_folder()?, true)
+            .await?
+            .into_iter()
             .find(|modpack| {
                 modpack.modpack_id.as_deref() == Some(synced_modpack.modpack_id.as_str())
-            })
-            .cloned()
-        {
-            return Ok(Some(local_modpack));
-        }
-
-        Ok(modpacks.into_iter().find(|modpack| {
-            modpack.modpack_id.is_none()
-                && modpack.last_synced != 0
-                && modpack.name == synced_modpack.name
-        }))
-    }
-
-    async fn maybe_backfill_local_modpack_id(
-        &self,
-        local_modpack: Option<LocalModpack>,
-        synced_modpack: &SyncedModpack,
-    ) -> Result<Option<LocalModpack>> {
-        let Some(mut local_modpack) = local_modpack else {
-            return Ok(None);
-        };
-
-        if local_modpack.modpack_id.as_deref() == Some(synced_modpack.modpack_id.as_str()) {
-            return Ok(Some(local_modpack));
-        }
-        if local_modpack.modpack_id.is_some() {
-            return Ok(None);
-        }
-
-        let local_sync_time = u64::try_from(local_modpack.last_synced / 1000).unwrap_or_default();
-        self.persist_sync_metadata(
-            &local_modpack.name,
-            local_sync_time,
-            Some(synced_modpack.modpack_id.as_str()),
-        )?;
-        local_modpack.modpack_id = Some(synced_modpack.modpack_id.clone());
-        Ok(Some(local_modpack))
+            }))
     }
 
     async fn maybe_apply_remote_modpack_update(
@@ -2117,7 +2246,32 @@ impl QuadrantHost {
             return Ok(());
         }
 
-        let remote_mods = serde_json::from_str(&synced_modpack.mods)?;
+        local_modpack.ensure_manifest_readable()?;
+        let remote_mods: Vec<InstalledMod> = serde_json::from_str(&synced_modpack.mods)?;
+        // Whoever can push to a pack decides which files its members run, so
+        // a link to an arbitrary host waits for the user to apply it.
+        let review = review_incoming_mods(&local_modpack.mods, &remote_mods);
+        let warning = |applied| {
+            let names = |mods: &[InstalledMod]| {
+                mods.iter()
+                    .map(|mod_| mod_.display_name().to_string())
+                    .collect()
+            };
+            BackendEvent::ModpackSyncWarning {
+                modpack_id: synced_modpack.modpack_id.clone(),
+                name: local_modpack.name.clone(),
+                applied,
+                online_mods: names(&review.online),
+                unverified_mods: names(&review.unverified),
+            }
+        };
+        if !review.online.is_empty() {
+            log::warn!(
+                "Held back a synced update of \"{}\": it adds or changes Online mods",
+                local_modpack.name
+            );
+            return self.inner.event_sink.publish(warning(false));
+        }
         if !self.begin_modpack_update(&local_modpack.name).await {
             return Ok(());
         }
@@ -2140,7 +2294,11 @@ impl QuadrantHost {
         }
         .await;
         self.finish_modpack_update(&local_modpack.name).await;
-        result
+        result?;
+        if !review.unverified.is_empty() {
+            self.inner.event_sink.publish(warning(true))?;
+        }
+        Ok(())
     }
 
     async fn begin_modpack_update(&self, modpack_name: &str) -> bool {
@@ -2188,11 +2346,6 @@ impl QuadrantHost {
             .notification_state
             .mark_read(notification_id)
             .then(|| state.notification_state.notifications_for_ui())
-    }
-
-    async fn set_reconnect_attempt(&self, attempt: u32) {
-        let mut state = self.inner.runtime_state.lock().await;
-        state.notification_state.reconnect_attempt = attempt;
     }
 
     async fn mark_modpack_sync_processed(&self, notification: &Notification) {
@@ -2244,10 +2397,8 @@ impl QuadrantHost {
 struct NotificationRuntimeState {
     by_key: HashMap<String, Notification>,
     key_by_notification_id: HashMap<String, String>,
-    ordered_keys: Vec<String>,
     processed_modpack_sync_by_key: HashMap<String, String>,
     cursor: NotificationCursor,
-    reconnect_attempt: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2283,18 +2434,39 @@ impl NotificationRuntimeState {
                 }
                 self.key_by_notification_id
                     .insert(notification.notification_id.clone(), identity_key);
-                self.sort_keys();
                 UpsertOutcome { changed: true }
             }
             None => {
-                self.ordered_keys.push(identity_key.clone());
                 self.by_key
                     .insert(identity_key.clone(), notification.clone());
                 self.key_by_notification_id
                     .insert(notification.notification_id.clone(), identity_key);
-                self.sort_keys();
+                if self.by_key.len() > NOTIFICATION_HISTORY_LIMIT {
+                    self.forget_oldest();
+                }
                 UpsertOutcome { changed: true }
             }
+        }
+    }
+
+    /// Keeps a long session from growing the list without bound: the server
+    /// replays no more than this many on a reconnect either.
+    fn forget_oldest(&mut self) {
+        let Some(oldest_key) = self
+            .by_key
+            .iter()
+            .min_by(|(_, left), (_, right)| {
+                left.created_at_unix
+                    .cmp(&right.created_at_unix)
+                    .then_with(|| left.notification_id.cmp(&right.notification_id))
+            })
+            .map(|(key, _)| key.clone())
+        else {
+            return;
+        };
+        if let Some(oldest) = self.by_key.remove(&oldest_key) {
+            self.key_by_notification_id
+                .remove(oldest.notification_id.as_str());
         }
     }
 
@@ -2313,12 +2485,7 @@ impl NotificationRuntimeState {
     }
 
     fn notifications_for_ui(&self) -> Vec<Notification> {
-        let mut notifications = self
-            .ordered_keys
-            .iter()
-            .filter_map(|key| self.by_key.get(key))
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut notifications = self.by_key.values().cloned().collect::<Vec<_>>();
         notifications.sort_by(|a, b| {
             b.created_at_unix
                 .cmp(&a.created_at_unix)
@@ -2347,21 +2514,6 @@ impl NotificationRuntimeState {
                 notification_id: Some(notification.notification_id.clone()),
             };
         }
-    }
-
-    fn sort_keys(&mut self) {
-        self.ordered_keys.sort_by(|left, right| {
-            let left_notification = self.by_key.get(left).expect("missing notification");
-            let right_notification = self.by_key.get(right).expect("missing notification");
-            left_notification
-                .created_at_unix
-                .cmp(&right_notification.created_at_unix)
-                .then_with(|| {
-                    left_notification
-                        .notification_id
-                        .cmp(&right_notification.notification_id)
-                })
-        });
     }
 
     fn should_process_modpack_sync_notification(&self, notification: &Notification) -> bool {
@@ -2438,6 +2590,26 @@ fn merge_notifications_and_collect_updates(
             .filter_map(|identity_key| latest_modpack_sync_by_key.remove(&identity_key))
             .collect(),
         membership_modpack_ids,
+    }
+}
+
+/// After `failures` refreshes in a row failed, how many checks to let pass
+/// before the next try: 1, 3, 7, ... up to 31, so an unreachable server is
+/// asked at most every 32 minutes instead of every minute.
+fn token_refresh_ticks_to_skip(failures: u32) -> u32 {
+    (1 << failures.min(5)) - 1
+}
+
+/// A connection that stayed open this long was healthy, so the next drop is
+/// retried quickly again. One the server accepts and then drops at once keeps
+/// backing off instead of being retried every second.
+const WS_STABLE_CONNECTION: Duration = Duration::from_secs(30);
+
+fn next_reconnect_attempt(previous: u32, connected_for: Option<Duration>) -> u32 {
+    if connected_for.is_some_and(|uptime| uptime >= WS_STABLE_CONNECTION) {
+        1
+    } else {
+        previous.saturating_add(1)
     }
 }
 
@@ -2663,16 +2835,12 @@ struct IdArgs {
 }
 
 #[derive(Deserialize)]
-struct SetSecretArgs {
-    key: String,
-    value: String,
-}
-
-#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OAuthLoginArgs {
     code: String,
     redirect_uri: String,
+    #[serde(default)]
+    code_verifier: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2773,10 +2941,14 @@ mod tests {
     };
     use quadrant_core::{
         account::KEYRING_SERVICE,
+        account::quadrant_sync::SyncedModpack,
         content::{ContentLocation, ContentLocationKind, PACK_TYPES},
         events::{BackendEvent, ModProgressPayload},
         mc_mod::ModType,
-        models::{LocalModpack, ModLoader, SyncInfo, modpack_path},
+        models::{
+            InstalledMod, InstalledModpack, LocalModpack, ModLoader, ModSource, SyncInfo,
+            modpack_path,
+        },
         ports::{EventSink, SettingsStore},
         prism::PrismSyncPlan,
     };
@@ -2786,6 +2958,47 @@ mod tests {
         path::{Path, PathBuf},
     };
     use tempfile::tempdir;
+
+    #[test]
+    fn keyring_initialization_is_retried_until_it_succeeds() {
+        let ready = std::sync::Mutex::new(false);
+        let mut calls = 0;
+        let mut init = |succeed: bool| {
+            calls += 1;
+            if succeed {
+                Ok(())
+            } else {
+                Err("no secret service")
+            }
+        };
+
+        assert!(super::ensure_initialized(&ready, || init(false)).is_err());
+        assert!(super::ensure_initialized(&ready, || init(true)).is_ok());
+        assert!(super::ensure_initialized(&ready, || init(false)).is_ok());
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn failed_token_refreshes_back_off() {
+        let skips: Vec<_> = (1..=7).map(super::token_refresh_ticks_to_skip).collect();
+        assert_eq!(skips, [1, 3, 7, 15, 31, 31, 31]);
+    }
+
+    #[test]
+    fn reconnects_back_off_until_a_connection_stays_up() {
+        use super::{next_reconnect_attempt, reconnect_delay};
+        use std::time::Duration;
+
+        let mut attempt = 0;
+        for _ in 0..6 {
+            attempt = next_reconnect_attempt(attempt, Some(Duration::from_secs(1)));
+        }
+        assert_eq!(reconnect_delay(attempt), Duration::from_secs(60));
+        assert_eq!(next_reconnect_attempt(attempt, None), 7);
+
+        attempt = next_reconnect_attempt(attempt, Some(Duration::from_secs(45)));
+        assert_eq!(reconnect_delay(attempt), Duration::from_secs(1));
+    }
 
     fn notification(id: &str, unix: i64, read: bool) -> Notification {
         Notification {
@@ -2836,6 +3049,7 @@ mod tests {
             is_applied: false,
             last_synced,
             modpack_id: Some("modpack-7".to_string()),
+            manifest_error: None,
         }
     }
 
@@ -2849,17 +3063,93 @@ mod tests {
     }
 
     #[test]
-    fn json_store_rejects_non_object_documents() {
+    fn json_store_sets_unreadable_documents_aside_and_starts_empty() {
+        for document in ["[]", "null", "true", "42", "\"settings\"", "{\"mcFolder\":"] {
+            let temp_dir = tempdir().unwrap();
+            let path = temp_dir.path().join("config.json");
+            fs::write(&path, document).unwrap();
+
+            let store = JsonFileStore::new(path.clone()).unwrap();
+
+            assert!(store.entries().unwrap().is_empty(), "kept {document}");
+            assert!(!path.exists());
+            let backups: Vec<_> = fs::read_dir(temp_dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("config.json.corrupt-")
+                })
+                .collect();
+            assert_eq!(backups.len(), 1);
+            assert_eq!(fs::read_to_string(&backups[0]).unwrap(), document);
+
+            store.set_bool("modrinth", true).unwrap();
+            let reloaded = JsonFileStore::new(path).unwrap();
+            assert_eq!(reloaded.get_bool("modrinth").unwrap(), Some(true));
+        }
+    }
+
+    #[test]
+    fn json_stores_sharing_a_file_keep_each_others_writes() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("config.json");
-        for document in ["[]", "null", "true", "42", "\"settings\""] {
-            fs::write(&path, document).unwrap();
-            assert!(
-                JsonFileStore::new(path.clone()).is_err(),
-                "accepted {document}"
-            );
-            assert_eq!(fs::read_to_string(&path).unwrap(), document);
-        }
+        // Separate stores have separate in-process locks, like two processes.
+        let stores = [
+            JsonFileStore::new(path.clone()).unwrap(),
+            JsonFileStore::new(path.clone()).unwrap(),
+        ];
+        std::thread::scope(|scope| {
+            for (index, store) in stores.iter().enumerate() {
+                scope.spawn(move || {
+                    for key in 0..40 {
+                        store.set_i64(&format!("key-{index}-{key}"), key).unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            JsonFileStore::new(path).unwrap().entries().unwrap().len(),
+            80
+        );
+    }
+
+    #[test]
+    fn json_store_reads_the_file_again_only_when_it_changed() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("config.json");
+        let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let write_aged = |contents: &str, modified: std::time::SystemTime| {
+            fs::write(&path, contents).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+        };
+        write_aged(r#"{"mcFolder":"/a"}"#, an_hour_ago);
+        let store = JsonFileStore::new(path.clone()).unwrap();
+        assert_eq!(store.get_string("mcFolder").unwrap().as_deref(), Some("/a"));
+
+        // Same size and time: the cached copy answers without a parse.
+        write_aged(r#"{"mcFolder":"/b"}"#, an_hour_ago);
+        assert_eq!(store.get_string("mcFolder").unwrap().as_deref(), Some("/a"));
+
+        // Another process's write moves the stamp.
+        write_aged(
+            r#"{"mcFolder":"/b"}"#,
+            an_hour_ago + std::time::Duration::from_secs(60),
+        );
+        assert_eq!(store.get_string("mcFolder").unwrap().as_deref(), Some("/b"));
+
+        let other = JsonFileStore::new(path.clone()).unwrap();
+        other.set_string("mcFolder", "/c".to_string()).unwrap();
+        assert_eq!(store.get_string("mcFolder").unwrap().as_deref(), Some("/c"));
+        fs::remove_file(&path).unwrap();
+        assert_eq!(store.get_string("mcFolder").unwrap(), None);
     }
 
     #[test]
@@ -2914,6 +3204,29 @@ mod tests {
                 notification_id: Some("n2".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn notification_state_keeps_only_the_newest_history() {
+        let mut state = NotificationRuntimeState::default();
+        let total = super::NOTIFICATION_HISTORY_LIMIT + 5;
+        merge_notifications_and_collect_updates(
+            &mut state,
+            (0..total)
+                .rev()
+                .map(|index| notification(&format!("n{index:04}"), index as i64, false))
+                .collect(),
+        );
+
+        let notifications = state.notifications_for_ui();
+        assert_eq!(notifications.len(), super::NOTIFICATION_HISTORY_LIMIT);
+        assert_eq!(
+            notifications[0].notification_id,
+            format!("n{:04}", total - 1)
+        );
+        assert_eq!(notifications.last().unwrap().notification_id, "n0005");
+        assert!(!state.mark_read("n0004"));
+        assert!(state.mark_read("n0005"));
     }
 
     #[test]
@@ -2981,6 +3294,182 @@ mod tests {
         host.maybe_auto_sync_updated_modpack(Some(local_modpack(0)))
             .await
             .unwrap();
+    }
+
+    /// The listing the renderer sends can predate the damage, so the push
+    /// checks the file itself, before it needs an account.
+    #[tokio::test]
+    async fn a_pack_with_an_unreadable_manifest_is_never_pushed() {
+        let temp_dir = tempdir().unwrap();
+        let (host, mc_folder) = sync_host(temp_dir.path());
+        fs::write(
+            modpack_path(&mc_folder, "pack").join("modConfigV2.json"),
+            "{not json",
+        )
+        .unwrap();
+
+        let error = host
+            .sync_modpack(local_modpack(1_762_000_000_000), false)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("can't read"), "{error}");
+
+        let listed = host.get_modpacks(false).await.unwrap();
+        let error = host
+            .sync_modpack(listed[0].clone(), true)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("can't read"), "{error}");
+        assert!(host.share_modpack("pack".to_string()).await.is_err());
+    }
+
+    fn synced_modpack(mods: &[InstalledMod]) -> SyncedModpack {
+        SyncedModpack {
+            name: "pack".to_string(),
+            minecraft_version: "1.21.1".to_string(),
+            mod_loader: ModLoader::Fabric,
+            mods: serde_json::to_string(mods).unwrap(),
+            owners: Vec::new(),
+            last_synced: 1_762_000_100,
+            modpack_id: "modpack-7".to_string(),
+        }
+    }
+
+    fn seed_synced_pack(host: &QuadrantHost, mc_folder: &Path, mods: Vec<InstalledMod>) -> String {
+        let manifest = serde_json::to_string_pretty(&InstalledModpack {
+            mod_config_version: "2".to_string(),
+            quadrant_version: String::new(),
+            name: "pack".to_string(),
+            version: "1.21.1".to_string(),
+            mod_loader: ModLoader::Fabric,
+            mods,
+        })
+        .unwrap();
+        fs::write(
+            modpack_path(mc_folder, "pack").join("modConfigV2.json"),
+            &manifest,
+        )
+        .unwrap();
+        host.persist_sync_metadata("pack", 1_762_000_000, Some("modpack-7"))
+            .unwrap();
+        manifest
+    }
+
+    /// A named entry, so listing and installing never look its name up on
+    /// Modrinth.
+    fn named_modrinth_mod(id: &str) -> InstalledMod {
+        InstalledMod {
+            name: id.to_string(),
+            ..InstalledMod::minimal(
+                id.to_string(),
+                ModSource::Modrinth,
+                format!("https://cdn.modrinth.com/data/{id}.jar"),
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn an_automatic_update_with_online_mods_waits_for_the_user() {
+        let temp_dir = tempdir().unwrap();
+        let (host, mc_folder) = sync_host(temp_dir.path());
+        let kept = named_modrinth_mod("kept");
+        let manifest = seed_synced_pack(&host, &mc_folder, vec![kept.clone()]);
+        let mut events = host.subscribe_events();
+        let local = host.get_modpacks(false).await.unwrap().remove(0);
+        let planted = InstalledMod {
+            name: "Sodium".to_string(),
+            ..InstalledMod::minimal(
+                "sodium".to_string(),
+                ModSource::Online,
+                "https://evil.example/sodium.jar".to_string(),
+            )
+        };
+
+        host.maybe_apply_remote_modpack_update(&local, &synced_modpack(&[kept, planted]))
+            .await
+            .unwrap();
+
+        let envelope = events.recv().await.unwrap();
+        assert_eq!(envelope.event, "modpackSyncWarning");
+        assert_eq!(
+            envelope.payload,
+            json!({
+                "modpackId": "modpack-7",
+                "name": "pack",
+                "applied": false,
+                "onlineMods": ["Sodium"],
+                "unverifiedMods": ["Sodium"],
+            })
+        );
+        assert_eq!(
+            fs::read_to_string(modpack_path(&mc_folder, "pack").join("modConfigV2.json")).unwrap(),
+            manifest
+        );
+        let listed = host.get_modpacks(false).await.unwrap();
+        assert_eq!(listed[0].last_synced, 1_762_000_000_000);
+    }
+
+    #[tokio::test]
+    async fn an_automatic_update_with_unhashed_mods_is_applied_with_a_warning() {
+        let temp_dir = tempdir().unwrap();
+        let (host, mc_folder) = sync_host(temp_dir.path());
+        let added = named_modrinth_mod("added");
+        // The file is already in the pack under the same download, so the
+        // install needs no network. The listing below predates the entry,
+        // so the review sees it as new.
+        let mut local = host.get_modpacks(false).await.unwrap().remove(0);
+        seed_synced_pack(&host, &mc_folder, vec![added.clone()]);
+        fs::write(modpack_path(&mc_folder, "pack").join("added.jar"), b"jar").unwrap();
+        local.last_synced = 1_762_000_000_000;
+        let mut events = host.subscribe_events();
+
+        host.maybe_apply_remote_modpack_update(&local, &synced_modpack(&[added]))
+            .await
+            .unwrap();
+
+        let warning = loop {
+            let envelope = events.recv().await.unwrap();
+            if envelope.event == "modpackSyncWarning" {
+                break envelope.payload;
+            }
+        };
+        assert_eq!(
+            warning,
+            json!({
+                "modpackId": "modpack-7",
+                "name": "pack",
+                "applied": true,
+                "onlineMods": [],
+                "unverifiedMods": ["added"],
+            })
+        );
+        let listed = host.get_modpacks(false).await.unwrap();
+        assert_eq!(listed[0].last_synced, 1_762_000_100_000);
+        assert!(listed[0].mods[0].sha512.is_some());
+    }
+
+    #[tokio::test]
+    async fn automatic_updates_reach_only_the_pack_recording_the_synced_id() {
+        let temp_dir = tempdir().unwrap();
+        let (host, mc_folder) = sync_host(temp_dir.path());
+        seed_synced_pack(&host, &mc_folder, Vec::new());
+        let synced = synced_modpack(&[]);
+        assert!(
+            host.resolve_local_modpack_for_sync(&synced)
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        // Synced once under the same name, but recording no id.
+        host.persist_sync_metadata("pack", 1_762_000_000, None)
+            .unwrap();
+        assert!(
+            host.resolve_local_modpack_for_sync(&synced)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -3735,5 +4224,34 @@ mod tests {
         let envelope = receiver.recv().await.unwrap();
         assert_eq!(envelope.event, "configChanged");
         assert_eq!(envelope.payload, json!("uiScale"));
+    }
+
+    #[tokio::test]
+    async fn event_bridge_forwards_sync_warnings_in_camel_case() {
+        let bridge = HostEventBridge::new();
+        let mut receiver = bridge.subscribe();
+
+        bridge
+            .publish(BackendEvent::ModpackSyncWarning {
+                modpack_id: "modpack-7".to_string(),
+                name: "pack".to_string(),
+                applied: true,
+                online_mods: Vec::new(),
+                unverified_mods: vec!["Sodium".to_string(), "Lithium".to_string()],
+            })
+            .unwrap();
+
+        let envelope = receiver.recv().await.unwrap();
+        assert_eq!(envelope.event, "modpackSyncWarning");
+        assert_eq!(
+            envelope.payload,
+            json!({
+                "modpackId": "modpack-7",
+                "name": "pack",
+                "applied": true,
+                "onlineMods": [],
+                "unverifiedMods": ["Sodium", "Lithium"],
+            })
+        );
     }
 }
