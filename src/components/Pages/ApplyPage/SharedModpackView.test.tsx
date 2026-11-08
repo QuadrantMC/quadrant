@@ -13,11 +13,13 @@ import {
 
 const getMod = vi.fn();
 const installModpack = vi.fn();
+const getModpacks = vi.fn();
 const back = vi.fn();
 
 vi.mock("../../../tools", () => ({
   getMod: (...args: unknown[]) => getMod(...args),
   installModpack: (...args: unknown[]) => installModpack(...args),
+  getModpacks: (...args: unknown[]) => getModpacks(...args),
 }));
 vi.mock("../../../desktop", () => ({
   invoke: vi.fn(),
@@ -50,6 +52,7 @@ function deferredMod() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  getModpacks.mockResolvedValue([]);
 });
 
 describe("SharedModpackView", () => {
@@ -124,5 +127,44 @@ describe("SharedModpackView", () => {
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.getByRole("button", { name: "Download" })).toBeVisible();
     error.mockRestore();
+  });
+
+  describe("when a local pack already has the name", () => {
+    beforeEach(() => {
+      getMod.mockReturnValue(new Promise(() => {}));
+      getModpacks.mockResolvedValue([
+        { name: "shared PACK", version: "1.20.1", mods: [] },
+      ]);
+    });
+
+    it("asks before replacing it and installs only once confirmed", async () => {
+      render(<SharedModpackView modpack={pack} />);
+      await userEvent.click(screen.getByRole("button", { name: "Download" }));
+      expect(await screen.findByText(/already have a modpack/i)).toBeVisible();
+      expect(installModpack).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByRole("button", { name: "Replace" }));
+      await waitFor(() => expect(installModpack).toHaveBeenCalledWith(pack));
+    });
+
+    it("leaves the local pack alone when the question is cancelled", async () => {
+      render(<SharedModpackView modpack={pack} />);
+      await userEvent.click(screen.getByRole("button", { name: "Download" }));
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Cancel" }),
+      );
+      expect(installModpack).not.toHaveBeenCalled();
+    });
+
+    it("installs without asking for a pack from the user's own cloud", async () => {
+      render(
+        <SharedModpackView
+          modpack={pack}
+          syncTarget={{ syncedAt: 1, modpackId: "id" }}
+        />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Download" }));
+      await waitFor(() => expect(installModpack).toHaveBeenCalledWith(pack));
+    });
   });
 });

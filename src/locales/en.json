@@ -307,5 +307,8 @@
   "confirmKickMemberText": "{{username}} will lose access to {{name}} in Quadrant Sync.",
   "errorBoundaryTitle": "Something went wrong",
   "errorBoundaryText": "Quadrant hit an unexpected error. Reloading usually fixes it.",
-  "errorBoundaryReload": "Reload"
+  "errorBoundaryReload": "Reload",
+  "replaceModpackQuestion": "Replace {{name}}?",
+  "replaceModpackText": "You already have a modpack named {{name}} on this computer. Installing this one replaces its mods, version and loader.",
+  "replace": "Replace"
 }

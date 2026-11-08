@@ -313,5 +313,8 @@
   "confirmKickMemberText": "{{username}} втратить доступ до {{name}} в Quadrant Sync.",
   "errorBoundaryTitle": "Щось пішло не так",
   "errorBoundaryText": "Quadrant зіткнувся з несподіваною помилкою. Зазвичай допомагає перезавантаження.",
-  "errorBoundaryReload": "Перезавантажити"
+  "errorBoundaryReload": "Перезавантажити",
+  "replaceModpackQuestion": "Замінити {{name}}?",
+  "replaceModpackText": "На цьому комп'ютері вже є модпак {{name}}. Встановлення цього замінить його моди, версію та завантажувач.",
+  "replace": "Замінити"
 }

@@ -307,5 +307,8 @@
   "confirmKickMemberText": "{{username}}, Quadrant Sync'te {{name}} modpack'ine erişimini kaybedecek.",
   "errorBoundaryTitle": "Bir şeyler ters gitti",
   "errorBoundaryText": "Quadrant beklenmedik bir hatayla karşılaştı. Yeniden yüklemek genellikle sorunu çözer.",
-  "errorBoundaryReload": "Yeniden yükle"
+  "errorBoundaryReload": "Yeniden yükle",
+  "replaceModpackQuestion": "{{name}} değiştirilsin mi?",
+  "replaceModpackText": "Bu bilgisayarda zaten {{name}} adlı bir modpack var. Bunu kurmak onun modlarını, sürümünü ve yükleyicisini değiştirir.",
+  "replace": "Değiştir"
 }
