@@ -34,10 +34,12 @@ function cloudPack(over: Partial<SyncedModpack>): SyncedModpack {
 
 // Raises the backend event by hand, with the modpack id the host would send.
 let emit: ((payload: string | null) => void) | undefined;
+let recheck: (() => void) | undefined;
 
 beforeEach(() => {
   vi.clearAllMocks();
   emit = undefined;
+  recheck = undefined;
   getAccountInfo.mockResolvedValue({ login: "me", quadrant_sync_limit: 5 });
   getSyncedModpacks.mockResolvedValue([]);
   listen.mockImplementation(
@@ -47,6 +49,9 @@ beforeEach(() => {
     ) => {
       if (event === "refreshSyncedModpacks") {
         emit = (payload) => cb({ payload, event });
+      }
+      if (event === "recheckAccountToken") {
+        recheck = () => cb({ payload: null, event });
       }
       return () => {};
     },
@@ -203,5 +208,85 @@ describe("useSyncedModpacks", () => {
       cloudPack({ modpack_id: "a", name: "New A" }),
       cloudPack({ modpack_id: "b", name: "New B" }),
     ]);
+  });
+
+  // The mod list is cloud data any co-owner can write, and the cards parse it
+  // while rendering: one unreadable pack must not be able to blank the window.
+  it("leaves out a pack whose mod list is not valid JSON", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const good = cloudPack({ modpack_id: "a", name: "Alpha" });
+    getSyncedModpacks.mockResolvedValue([
+      good,
+      cloudPack({ modpack_id: "b", name: "Broken", mods: "{not json" }),
+      cloudPack({ modpack_id: "c", name: "Object", mods: "{}" }),
+    ]);
+    const view = renderHook(() => useSyncedModpacks());
+    await waitFor(() =>
+      expect(ids(view.result.current.syncedModpacks)).toEqual(["a"]),
+    );
+    error.mockRestore();
+  });
+
+  it("leaves out a refreshed pack that turned unreadable", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = await renderLoaded([
+      cloudPack({ modpack_id: "a", name: "Alpha" }),
+    ]);
+    getSyncedModpacks.mockResolvedValue([
+      cloudPack({ modpack_id: "a", name: "Alpha", mods: "oops" }),
+    ]);
+    await act(async () => emit?.("a"));
+    expect(view.result.current.syncedModpacks).toEqual([]);
+    error.mockRestore();
+  });
+
+  describe("account changes", () => {
+    it("loads the list after the user signs in", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      getAccountInfo.mockRejectedValue(new Error("signed out"));
+      const view = renderHook(() => useSyncedModpacks());
+      await waitFor(() => expect(recheck).toBeTypeOf("function"));
+      expect(view.result.current.accountInfo).toBeNull();
+
+      getAccountInfo.mockResolvedValue({ login: "me", quadrant_sync_limit: 5 });
+      getSyncedModpacks.mockResolvedValue([cloudPack({ modpack_id: "a" })]);
+      await act(async () => recheck?.());
+
+      await waitFor(() =>
+        expect(ids(view.result.current.syncedModpacks)).toEqual(["a"]),
+      );
+      expect(view.result.current.accountInfo).toMatchObject({ login: "me" });
+      error.mockRestore();
+    });
+
+    it("notices a plan upgrade from zero synced packs", async () => {
+      getAccountInfo.mockResolvedValue({ login: "me", quadrant_sync_limit: 0 });
+      const view = renderHook(() => useSyncedModpacks());
+      await waitFor(() => expect(recheck).toBeTypeOf("function"));
+      expect(getSyncedModpacks).not.toHaveBeenCalled();
+
+      getAccountInfo.mockResolvedValue({ login: "me", quadrant_sync_limit: 3 });
+      getSyncedModpacks.mockResolvedValue([cloudPack({ modpack_id: "a" })]);
+      await act(async () => recheck?.());
+
+      await waitFor(() =>
+        expect(ids(view.result.current.syncedModpacks)).toEqual(["a"]),
+      );
+    });
+
+    it("drops the previous account's packs when the user signs out", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const view = await renderLoaded([cloudPack({ modpack_id: "a" })]);
+      await waitFor(() => expect(recheck).toBeTypeOf("function"));
+
+      getAccountInfo.mockRejectedValue(new Error("signed out"));
+      await act(async () => recheck?.());
+
+      await waitFor(() =>
+        expect(view.result.current.syncedModpacks).toEqual([]),
+      );
+      expect(view.result.current.accountInfo).toBeNull();
+      error.mockRestore();
+    });
   });
 });

@@ -35,9 +35,24 @@ function withRefreshedModpack(
 }
 
 /**
- * Loads the signed-in account once and keeps the Quadrant Sync modpack list
- * fresh, re-fetching whenever the backend raises `refreshSyncedModpacks`.
- * Signed-out users get an empty list and a null account.
+ * Whether the pack's mod list parses. The list is cloud-side data any
+ * co-owner can write, and the cards parse it while rendering, so one bad pack
+ * would otherwise take the whole window down.
+ */
+function hasReadableMods(modpack: SyncedModpack): boolean {
+  try {
+    return Array.isArray(JSON.parse(modpack.mods));
+  } catch {
+    console.error(`Ignoring synced modpack ${modpack.modpack_id}: bad mods`);
+    return false;
+  }
+}
+
+/**
+ * Loads the signed-in account and keeps the Quadrant Sync modpack list fresh,
+ * re-fetching whenever the backend raises `refreshSyncedModpacks` and
+ * re-reading the account on `recheckAccountToken` (sign-in, sign-out, plan
+ * changes). Signed-out users get an empty list and a null account.
  */
 export function useSyncedModpacks(): SyncedModpacksState {
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null);
@@ -62,7 +77,9 @@ export function useSyncedModpacks(): SyncedModpacksState {
       pendingFullRef.current++;
     }
     try {
-      const modpacks = await getSyncedModpacks(true, targetId);
+      const modpacks = (await getSyncedModpacks(true, targetId)).filter(
+        hasReadableMods,
+      );
       if (
         request !== requestRef.current ||
         (targetId && targetedRef.current.get(targetId) !== targeted)
@@ -85,37 +102,59 @@ export function useSyncedModpacks(): SyncedModpacksState {
     let isUnmounted = false;
     const cleanupFns: Array<() => void> = [];
 
-    const effect = async () => {
-      let info: AccountInfo;
+    // The latest account read wins; an older answer must not undo it.
+    let accountRequest = 0;
+    let signedIn = false;
+    const loadAccount = async () => {
+      const request = ++accountRequest;
+      let info: AccountInfo | null = null;
       try {
         info = await getAccountInfo();
       } catch (error) {
         // Throws when signed out, which must leave the list empty.
         console.error(error);
+      }
+      if (isUnmounted || request !== accountRequest) {
         return;
       }
-      if (isUnmounted || info.quadrant_sync_limit === 0) {
+      if (info === null || info.quadrant_sync_limit === 0) {
+        signedIn = false;
+        requestRef.current++;
+        setAccountInfo(null);
+        setSyncedModpacks([]);
         return;
       }
+      signedIn = true;
       setAccountInfo(info);
-
       // A transient fetch failure must not prevent subscribing to recovery events.
       void refresh();
-      const unlisten = await listen<string | null>(
-        "refreshSyncedModpacks",
-        (event) => {
-          if (isUnmounted) {
-            return;
-          }
-          // The host sends an empty payload when it cannot name the pack.
-          void refresh(event.payload || undefined);
-        },
-      );
+    };
+
+    const subscribe = async (
+      event: string,
+      handler: (payload: unknown) => void,
+    ) => {
+      const unlisten = await listen<unknown>(event, (e) => {
+        if (!isUnmounted) {
+          handler(e.payload);
+        }
+      });
       if (isUnmounted) {
         unlisten();
       } else {
         cleanupFns.push(unlisten);
       }
+    };
+
+    const effect = async () => {
+      await loadAccount();
+      await subscribe("refreshSyncedModpacks", (payload) => {
+        if (signedIn) {
+          // The host sends an empty payload when it cannot name the pack.
+          void refresh((payload as string | null) || undefined);
+        }
+      });
+      await subscribe("recheckAccountToken", () => void loadAccount());
     };
 
     effect().catch(console.error);
