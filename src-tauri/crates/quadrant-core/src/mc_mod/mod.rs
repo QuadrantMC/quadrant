@@ -13,7 +13,9 @@ use crate::{
     ports::{EventSink, SettingsStore},
 };
 
-use cache::{add_cache_index, copy_hashing, file_hash, get_cache_index, sha512_hex};
+#[cfg(test)]
+use cache::file_hash;
+use cache::{add_cache_index, copy_hashing, get_cache_index, sha512_hex};
 #[cfg(feature = "curseforge")]
 use curseforge::{
     download_mod_curseforge, get_latest_mod_version_curseforge, search_mods_curseforge,

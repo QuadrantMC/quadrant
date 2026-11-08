@@ -8,7 +8,6 @@ use chrono::prelude::*;
 use moka::future::Cache as MokaCache;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use sha1::Digest;
 
 use crate::{
     Result,
@@ -590,6 +589,7 @@ pub(crate) async fn clear_curseforge_fingerprint_cache() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha1::Digest;
 
     #[test]
     fn a_project_is_distributable_unless_the_author_says_otherwise() {
