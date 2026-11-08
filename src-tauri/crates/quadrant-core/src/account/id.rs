@@ -9,7 +9,7 @@ use crate::{
     Result,
     account::{
         account_http_client, backend_base_url, clear_account_token, get_account_token,
-        get_refresh_token, set_secret, set_token_refresh_deadline,
+        get_refresh_token, send_with_token_refresh, set_secret, set_token_refresh_deadline,
     },
     ports::SecretStore,
 };
@@ -42,8 +42,18 @@ pub struct AccountInfo {
     pub quadrant_share_limit: i32,
     /// Login or username.
     pub login: String,
-    /// Current notification list.
+    /// Current notification list. Quadrant ID sends `null` to a token without
+    /// a notifications scope.
+    #[serde(default, deserialize_with = "deserialize_null_as_empty")]
     pub notifications: Vec<Notification>,
+}
+
+fn deserialize_null_as_empty<'de, D, T>(deserializer: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// Account notification returned by the Quadrant backend.
@@ -584,23 +594,32 @@ pub(crate) fn response_preview(body: &str) -> String {
     trimmed.chars().take(300).collect()
 }
 
-/// Marks a notification as read in the Quadrant backend.
+/// Marks a notification as read in the Quadrant backend, refreshing an
+/// expired access token like every other account call.
 pub async fn read_notification(
     secret_store: &impl SecretStore,
     user_agent: &str,
+    client_id: &str,
+    client_secret: &str,
     notification_id: String,
 ) -> Result<()> {
     log::info!("Marking notification {notification_id} as read");
-    let token = get_account_token(secret_store)?;
-    let request = account_http_client()
-        .post(format!("{}/account/notifications/read", backend_base_url()))
-        .header("User-Agent", user_agent)
-        .bearer_auth(&token)
-        .json(&serde_json::json!({
-            "notification_id": notification_id,
-        }))
-        .send()
-        .await?;
+    let body = serde_json::json!({ "notification_id": notification_id });
+    let request = send_with_token_refresh(
+        secret_store,
+        user_agent,
+        client_id,
+        client_secret,
+        |token| {
+            account_http_client()
+                .post(format!("{}/account/notifications/read", backend_base_url()))
+                .header("User-Agent", user_agent)
+                .bearer_auth(token)
+                .json(&body)
+                .send()
+        },
+    )
+    .await?;
 
     if request.status() != 200 {
         let body = request.text().await?;
@@ -612,10 +631,10 @@ pub async fn read_notification(
 #[cfg(test)]
 mod tests {
     use super::{
-        Notification, NotificationCursor, NotificationWsFrame,
+        AccountInfo, Notification, NotificationCursor, NotificationWsFrame,
         get_notification_history_all_since_with_refresh,
-        get_notification_history_page_with_refresh, oauth2_login, revoke_session,
-        try_refresh_token,
+        get_notification_history_page_with_refresh, oauth2_login, read_notification,
+        revoke_session, try_refresh_token,
     };
     use crate::{Result, ports::SecretStore};
     use httpmock::{
@@ -780,6 +799,76 @@ mod tests {
         .unwrap();
 
         request.assert_calls(0);
+    }
+
+    #[test]
+    fn account_info_without_a_notifications_scope_parses() {
+        let info: AccountInfo = serde_json::from_value(serde_json::json!({
+            "id": "user-1",
+            "name": "Me",
+            "login": "me",
+            "email": "",
+            "quadrant_sync_limit": 3,
+            "quadrant_share_limit": 5,
+            "otp_enabled": null,
+            "email_notifications_enabled": true,
+            "notifications": null,
+            "groups": []
+        }))
+        .unwrap();
+        assert!(info.notifications.is_empty());
+        assert_eq!(info.email, "");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn reading_a_notification_refreshes_an_expired_token() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let expired = server.mock(|when, then| {
+            when.method(POST)
+                .path("/account/notifications/read")
+                .header("authorization", "Bearer old-access");
+            then.status(401).body("Invalid or expired session");
+        });
+        let refresh = server.mock(|when, then| {
+            when.method(POST)
+                .path("/oauth2/token")
+                .body_includes("refresh_token=live-refresh");
+            then.status(200).json_body(serde_json::json!({
+                "access_token": "new-access",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "scope": "profile:read sync:read notifications:read"
+            }));
+        });
+        let read = server.mock(|when, then| {
+            when.method(POST)
+                .path("/account/notifications/read")
+                .header("authorization", "Bearer new-access")
+                .json_body(serde_json::json!({ "notification_id": "n1" }));
+            then.status(200).body("READ.");
+        });
+        let store = StatefulSecretStore::default();
+        store.set_secret("accountToken", "old-access").unwrap();
+        store.set_secret("refreshToken", "live-refresh").unwrap();
+
+        read_notification(
+            &store,
+            "test-agent",
+            "client-id",
+            "client-secret",
+            "n1".to_string(),
+        )
+        .await
+        .unwrap();
+
+        expired.assert();
+        refresh.assert();
+        read.assert();
     }
 
     #[tokio::test]

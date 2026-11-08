@@ -136,4 +136,10 @@ mod tests {
         assert_eq!(info.hardware_id, "hw-1");
         assert_eq!(info.modrinth_usage, 3);
     }
+
+    #[test]
+    fn the_user_agent_passes_the_usage_gate() {
+        // Quadrant ID takes usage only from a User-Agent naming one of its sites.
+        assert!(crate::mc_mod::get_user_agent().contains("usequadrant.dev"));
+    }
 }

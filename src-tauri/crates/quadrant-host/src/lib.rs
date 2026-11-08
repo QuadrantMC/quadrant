@@ -1254,6 +1254,8 @@ impl QuadrantHost {
         read_notification(
             &self.inner.secret_store,
             &self.inner.options.user_agent,
+            &self.inner.options.oauth_client_id,
+            &self.inner.options.oauth_client_secret,
             notification_id.clone(),
         )
         .await?;
