@@ -1063,6 +1063,7 @@ pub fn export_modpack_to(
         .collect::<std::result::Result<Vec<_>, _>>()?
         .into_iter()
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter(|entry| is_exported_file(&entry.file_name().to_string_lossy()))
         .collect::<Vec<_>>();
     entries.sort_by_key(|entry| entry.file_name());
 
@@ -1085,6 +1086,13 @@ pub fn export_modpack_to(
     event_sink.publish(BackendEvent::QuadrantExportProgress(1.0))?;
     log::info!("Modpack export complete");
     Ok(())
+}
+
+/// What an archive meant for other people leaves out: the sync link to this
+/// user's cloud pack, and hidden files, which are the leftovers of an
+/// interrupted atomic write (`.modConfigV2.json.<pid>.<n>.tmp`) or of the OS.
+fn is_exported_file(name: &str) -> bool {
+    name != "quadrantSync.json" && !name.starts_with('.')
 }
 
 fn write_export_archive(
@@ -2708,6 +2716,8 @@ mod tests {
         std::fs::write(folder.join("sample.jar"), "jar").unwrap();
         std::fs::create_dir(folder.join(".quadrant-install-1")).unwrap();
         std::fs::write(folder.join(".quadrant-install-1").join("partial.jar"), "x").unwrap();
+        std::fs::write(folder.join("quadrantSync.json"), "{}").unwrap();
+        std::fs::write(folder.join(".modConfigV2.json.1.0.tmp"), "{").unwrap();
 
         let destination = mc_folder.join("alpha.quadrantExport.zip");
         export_modpack_to(
