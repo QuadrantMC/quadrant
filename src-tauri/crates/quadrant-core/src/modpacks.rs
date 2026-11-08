@@ -668,6 +668,79 @@ pub fn check_manifest_readable(mc_folder: &Path, name: &str) -> Result<()> {
         .map_err(|error| crate::models::unreadable_manifest(name, error))
 }
 
+/// Records a `sha512` for every entry whose file is in its pack folder but
+/// whose manifest predates hashes, and returns how many it recorded. It runs
+/// on every launch: entries that have one, and packs with nothing to add, are
+/// left alone, so after the first launch of a version it finds no work.
+pub async fn backfill_mod_hashes(mc_folder: &Path) -> Result<usize> {
+    let modpacks_folder = mc_folder.join("modpacks");
+    tokio::task::spawn_blocking(move || {
+        let Ok(entries) = std::fs::read_dir(&modpacks_folder) else {
+            return Ok(0);
+        };
+        let mut recorded = 0;
+        for folder in entries.flatten().map(|entry| entry.path()) {
+            if !folder.is_dir() {
+                continue;
+            }
+            match backfill_pack_hashes(&folder) {
+                Ok(count) => recorded += count,
+                Err(error) => log::warn!(
+                    "Skipped recording file hashes for {}: {error}",
+                    folder.display()
+                ),
+            }
+        }
+        Ok(recorded)
+    })
+    .await?
+}
+
+fn backfill_pack_hashes(folder: &Path) -> Result<usize> {
+    let manifest_path = folder.join("modConfigV2.json");
+    if !manifest_path.is_file() {
+        return Ok(0);
+    }
+    let read_manifest = || -> Result<InstalledModpack> {
+        Ok(serde_json::from_slice(&std::fs::read(&manifest_path)?)?)
+    };
+    let hashes: Vec<(String, String)> = read_manifest()?
+        .mods
+        .into_iter()
+        .filter(|mod_| mod_.sha512.is_none())
+        .filter_map(|mod_| {
+            let path = folder.join(crate::mc_mod::download_file_name(&mod_.download_url)?);
+            let hash = file_sha512(&path).ok()?;
+            Some((mod_.download_url, hash))
+        })
+        .collect();
+    if hashes.is_empty() {
+        return Ok(0);
+    }
+
+    // Hashing takes a while, so the manifest is read again under the lock and
+    // only entries that still name the same download take a hash.
+    let _guard = crate::mc_mod::MODPACK_MANIFEST_LOCK
+        .lock()
+        .map_err(|_| anyhow!("Modpack manifest lock poisoned"))?;
+    let mut manifest = read_manifest()?;
+    let mut recorded = 0;
+    for mod_ in manifest
+        .mods
+        .iter_mut()
+        .filter(|mod_| mod_.sha512.is_none())
+    {
+        if let Some((_, hash)) = hashes.iter().find(|(url, _)| url == &mod_.download_url) {
+            mod_.sha512 = Some(hash.clone());
+            recorded += 1;
+        }
+    }
+    if recorded > 0 {
+        write_file_atomically(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+    }
+    Ok(recorded)
+}
+
 /// Persists the sync metadata for a modpack.
 pub fn set_modpack_sync_date(
     mc_folder: &Path,
@@ -1592,6 +1665,57 @@ mod tests {
             Some(crate::mc_mod::cache::sha512_hex(b"found"))
         );
         assert_eq!(mods[1].sha512.as_deref(), Some("sent along"));
+    }
+
+    #[tokio::test]
+    async fn backfill_records_missing_hashes_once_and_leaves_the_rest_alone() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        let present = online_mod("present", "https://example.invalid/present.jar".to_string());
+        let missing = online_mod("missing", "https://example.invalid/missing.jar".to_string());
+        let known = InstalledMod {
+            sha512: Some("already recorded".to_string()),
+            ..online_mod("known", "https://example.invalid/known.jar".to_string())
+        };
+        seed_pack(
+            &mc_folder,
+            vec![present, missing, known],
+            &[("present.jar", "present"), ("known.jar", "known")],
+        );
+        let broken = modpack_path(&mc_folder, "broken");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join("modConfigV2.json"), "{not json").unwrap();
+        std::fs::write(broken.join("mod.jar"), "jar").unwrap();
+        std::fs::write(mc_folder.join("modpacks").join(".DS_Store"), "").unwrap();
+
+        assert_eq!(backfill_mod_hashes(&mc_folder).await.unwrap(), 1);
+
+        let mods = read_manifest(&mc_folder, "alpha").mods;
+        assert_eq!(
+            mods[0].sha512,
+            Some(crate::mc_mod::cache::sha512_hex(b"present"))
+        );
+        assert_eq!(mods[1].sha512, None);
+        assert_eq!(mods[2].sha512.as_deref(), Some("already recorded"));
+        assert_eq!(
+            std::fs::read_to_string(broken.join("modConfigV2.json")).unwrap(),
+            "{not json"
+        );
+
+        let manifest = modpack_path(&mc_folder, "alpha").join("modConfigV2.json");
+        let after_first = std::fs::read(&manifest).unwrap();
+        let modified = std::fs::metadata(&manifest).unwrap().modified().unwrap();
+        assert_eq!(backfill_mod_hashes(&mc_folder).await.unwrap(), 0);
+        assert_eq!(std::fs::read(&manifest).unwrap(), after_first);
+        assert_eq!(
+            std::fs::metadata(&manifest).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_without_a_modpacks_folder_does_nothing() {
+        let dir = tempdir().unwrap();
+        assert_eq!(backfill_mod_hashes(dir.path()).await.unwrap(), 0);
     }
 
     #[test]

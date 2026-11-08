@@ -280,6 +280,14 @@ pub async fn run(launch: Launch) {
             app.manage(host.clone());
             log::info!("Initializing app...\nInitializing config...");
             host.init_config()?;
+            let backfill_host = host.clone();
+            tauri::async_runtime::spawn(async move {
+                match backfill_host.backfill_mod_hashes().await {
+                    Ok(0) => {}
+                    Ok(count) => log::info!("Recorded the file hashes of {count} mod(s)"),
+                    Err(error) => log::warn!("Failed to record mod file hashes: {error}"),
+                }
+            });
 
             if let Some(primary) = primary {
                 let handle = app.handle().clone();

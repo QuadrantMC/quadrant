@@ -48,9 +48,9 @@ use quadrant_core::{
     },
     models::{Article, InstalledMod, InstalledModpack, LocalModpack, ModLoader, ModSource},
     modpacks::{
-        apply_modpack, check_manifest_readable, create_modpack, delete_mod, delete_modpack,
-        export_modpack_to, get_modpacks, install_modpack, register_mod, set_modpack_sync_date,
-        update_modpack,
+        apply_modpack, backfill_mod_hashes, check_manifest_readable, create_modpack, delete_mod,
+        delete_modpack, export_modpack_to, get_modpacks, install_modpack, register_mod,
+        set_modpack_sync_date, update_modpack,
     },
     ports::{EventSink, SecretStore, SettingsStore},
     prism::{self, PrismInstance, PrismSyncPlan},
@@ -523,6 +523,12 @@ impl QuadrantHost {
 
     pub async fn get_modpacks(&self, hide_free: bool) -> Result<Vec<LocalModpack>> {
         get_modpacks(&self.get_minecraft_folder()?, hide_free).await
+    }
+
+    /// Records the file hashes older manifests lack. Hosts run it in the
+    /// background at every launch; see [`backfill_mod_hashes`].
+    pub async fn backfill_mod_hashes(&self) -> Result<usize> {
+        backfill_mod_hashes(&self.get_minecraft_folder()?).await
     }
 
     pub fn frontend_apply_modpack(&self, name: String) -> Result<()> {

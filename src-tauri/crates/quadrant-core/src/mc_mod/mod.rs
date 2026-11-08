@@ -25,7 +25,7 @@ use curseforge::{
 use http::{provider_cached_client, provider_http_client};
 use modrinth::{download_mod_modrinth, get_latest_mod_version_modrinth, search_mods_modrinth};
 
-static MODPACK_MANIFEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+pub(crate) static MODPACK_MANIFEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 pub mod cache;
 #[cfg(feature = "curseforge")]
