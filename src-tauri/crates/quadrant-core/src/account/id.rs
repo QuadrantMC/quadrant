@@ -237,7 +237,8 @@ pub struct PendingModpackUpdate {
 ///
 /// A refresh token the server refuses (`invalid_grant`) can never work again,
 /// so the stored credentials are cleared and the error is
-/// [`ErrorCode::SignedOut`](crate::error::ErrorCode::SignedOut).
+/// [`ErrorCode::SignedOut`](crate::error::ErrorCode::SignedOut), unless
+/// another process stored new tokens while the request was in flight.
 pub async fn try_refresh_token(
     secret_store: &impl SecretStore,
     client_id: &str,
@@ -268,6 +269,16 @@ pub async fn try_refresh_token(
     let status = response.status();
     let raw = response.text().await?;
     if is_refused_grant(status, &raw) {
+        // Another process sharing the keyring (the app and `quadrantmc`) may
+        // have rotated this refresh token while the request was in flight. The
+        // server refuses the replay without ending the session, so neither
+        // should this process.
+        if secret_store.get_secret("refreshToken")?.as_deref() != Some(refresh_token.as_str())
+            || secret_store.get_secret("accountToken")? != stale_access_token
+        {
+            log::info!("Another process refreshed the session while this refresh was in flight");
+            return Ok(());
+        }
         log::warn!("The refresh token was refused ({status}); clearing the session");
         clear_account_token(secret_store)?;
         return Err(
@@ -934,6 +945,51 @@ mod tests {
         assert_eq!(store.get_secret("accountToken").unwrap(), None);
         assert_eq!(store.get_secret("refreshToken").unwrap(), None);
         assert!(!crate::account::account_token_needs_refresh(&store).unwrap());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn refused_refresh_keeps_a_session_another_process_rotated() {
+        let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
+        let server = MockServer::start();
+        unsafe {
+            std::env::set_var("QUADRANT_API_BASE_URL", server.base_url());
+        }
+        let replay = server.mock(|when, then| {
+            when.method(POST)
+                .path("/oauth2/token")
+                .body_includes("refresh_token=first-refresh");
+            then.status(400)
+                .delay(std::time::Duration::from_millis(300))
+                .json_body(serde_json::json!({
+                    "error": "invalid_grant",
+                    "error_description": "Invalid refresh token"
+                }));
+        });
+        let store = StatefulSecretStore::default();
+        store.set_secret("accountToken", "first-access").unwrap();
+        store.set_secret("refreshToken", "first-refresh").unwrap();
+
+        let other_process = async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            store.set_secret("accountToken", "second-access").unwrap();
+            store.set_secret("refreshToken", "second-refresh").unwrap();
+        };
+        let (refreshed, ()) = tokio::join!(
+            try_refresh_token(&store, "client-id", "client-secret", "test-agent"),
+            other_process
+        );
+
+        refreshed.unwrap();
+        replay.assert();
+        assert_eq!(
+            store.get_secret("accountToken").unwrap().as_deref(),
+            Some("second-access")
+        );
+        assert_eq!(
+            store.get_secret("refreshToken").unwrap().as_deref(),
+            Some("second-refresh")
+        );
     }
 
     #[tokio::test]
