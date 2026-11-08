@@ -191,7 +191,7 @@ pub(crate) fn safe_download_file_name(download_url: &str, source: &ModSource) ->
     Ok(decoded)
 }
 
-//// Discovers local modpacks under `<mcFolder>/modpacks`.
+/// Discovers local modpacks under `<mcFolder>/modpacks`.
 pub async fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<LocalModpack>> {
     let mut modpacks = Vec::new();
     let modpacks_folder = mc_folder.join("modpacks");

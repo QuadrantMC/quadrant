@@ -957,7 +957,7 @@ pub async fn install_remote_file(
     .await
 }
 
-//// Attempts to identify local mod files in a modpack using enabled providers.
+/// Attempts to identify local mod files in a modpack using enabled providers.
 pub async fn identify_modpack(
     mc_folder: &Path,
     modpack: String,
