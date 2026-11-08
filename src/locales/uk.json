@@ -316,5 +316,6 @@
   "errorBoundaryReload": "Перезавантажити",
   "replaceModpackQuestion": "Замінити {{name}}?",
   "replaceModpackText": "На цьому комп'ютері вже є модпак {{name}}. Встановлення цього замінить його моди, версію та завантажувач.",
-  "replace": "Замінити"
+  "replace": "Замінити",
+  "datapack": "Набір даних з {{source}}"
 }

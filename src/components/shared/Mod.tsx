@@ -29,7 +29,7 @@ import ModInstallPage from "../Pages/ModInstallPage/ModInstallPage";
 import Button from "../core/Button";
 import "./Mod.css";
 import { createDesktopStore, listen } from "../../desktop";
-import { isPackType } from "../../contentLocations";
+import { isInstallable, isPackType } from "../../contentLocations";
 import { useReportError } from "../../useReportError";
 
 export interface IModProps {
@@ -66,8 +66,7 @@ export default function Mod(props: IModProps) {
       : "";
   // Modpacks and data packs are browsable but not one-click installable; the
   // card surfaces "open in web" for them instead of a download action.
-  const installable =
-    mod.modType !== ModType.Modpack && mod.modType !== ModType.DataPack;
+  const installable = isInstallable(mod.modType);
   const description = mod.description.trim();
 
   const [visible, setVisible] = useState(true);

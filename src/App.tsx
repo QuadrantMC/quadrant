@@ -5,7 +5,6 @@ import {
   ContentContext,
   type IContentContext,
   ModLoader,
-  ModType,
   type Page,
   type SnackbarHistoryItem,
   type SnackbarState,
@@ -57,6 +56,7 @@ import {
   UI_SCALE_STEP,
 } from "./uiScale";
 import { resolveDeepLink } from "./deepLinks";
+import { isInstallable } from "./contentLocations";
 import { appendSnackbarHistory } from "./snackbar";
 
 function App() {
@@ -397,7 +397,9 @@ function App() {
               },
               action.source,
             );
-            if (mod.modType === ModType.Unknown) {
+            // The install page can only install mods, resource packs and
+            // shaders; its Download would always fail for the rest.
+            if (!isInstallable(mod.modType)) {
               showUnsupported();
               return;
             }

@@ -17,6 +17,18 @@ export function isPackType(modType: ModType): modType is PackType {
   return modType in SECTION_TITLE_KEYS;
 }
 
+/**
+ * Whether the install flow can install this kind of project. Modpacks and
+ * data packs can be browsed, but their download is not supported.
+ */
+export function isInstallable(modType: ModType): boolean {
+  return (
+    modType !== ModType.Unknown &&
+    modType !== ModType.Modpack &&
+    modType !== ModType.DataPack
+  );
+}
+
 /** What the user calls one section: its kind of pack, in their language. */
 export function sectionTitle(modType: ModType, t: TFunction): string {
   return isPackType(modType) ? t(SECTION_TITLE_KEYS[modType]) : modType;

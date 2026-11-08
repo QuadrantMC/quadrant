@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { TFunction } from "i18next";
 import { ContentLocation, ModType } from "./intefaces";
 import {
+  isInstallable,
   isPackType,
   locationOptionLabel,
   locationTitle,
@@ -27,6 +28,20 @@ function location(over: Partial<ContentLocation>): ContentLocation {
 
 const minecraft = location({});
 const survival = location({ id: "prism:1", kind: "prism", name: "Survival" });
+
+describe("isInstallable", () => {
+  it("accepts what the install flow can write to disk", () => {
+    expect(isInstallable(ModType.Mod)).toBe(true);
+    expect(isInstallable(ModType.ResourcePack)).toBe(true);
+    expect(isInstallable(ModType.ShaderPack)).toBe(true);
+  });
+
+  it("rejects what can only be browsed", () => {
+    expect(isInstallable(ModType.Modpack)).toBe(false);
+    expect(isInstallable(ModType.DataPack)).toBe(false);
+    expect(isInstallable(ModType.Unknown)).toBe(false);
+  });
+});
 
 describe("isPackType", () => {
   it("accepts the kinds that live in a folder of their own", () => {

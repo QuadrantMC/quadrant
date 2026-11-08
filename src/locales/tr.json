@@ -310,5 +310,6 @@
   "errorBoundaryReload": "Yeniden yükle",
   "replaceModpackQuestion": "{{name}} değiştirilsin mi?",
   "replaceModpackText": "Bu bilgisayarda zaten {{name}} adlı bir modpack var. Bunu kurmak onun modlarını, sürümünü ve yükleyicisini değiştirir.",
-  "replace": "Değiştir"
+  "replace": "Değiştir",
+  "datapack": "{{source}} veri paketi"
 }
