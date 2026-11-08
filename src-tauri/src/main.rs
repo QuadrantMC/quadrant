@@ -61,6 +61,9 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build tokio runtime");
+    // Tauri would otherwise build a second multi-threaded runtime of its own
+    // for commands and background tasks.
+    tauri::async_runtime::set(runtime.handle().clone());
 
     runtime.block_on(async {
         quadrant_next_lib::run(launch).await;
