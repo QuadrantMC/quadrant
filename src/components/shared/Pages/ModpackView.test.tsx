@@ -127,4 +127,86 @@ describe("ModpackView", () => {
     expect(back).toHaveBeenCalledTimes(1);
     expect(staleBack).not.toHaveBeenCalled();
   });
+
+  describe("when the pack it shows changes", () => {
+    const base = {
+      version: "1.20.1",
+      modLoader: ModLoader.Fabric,
+      isApplied: false,
+      lastSynced: 0,
+      unknownMods: false,
+    };
+    const mod = (id: string) => ({
+      id,
+      downloadUrl: "",
+      source: ModSource.Modrinth,
+    });
+
+    it("loads the cards of the new pack, not the old one", async () => {
+      const { rerender } = render(
+        <ModpackView {...base} name="Old" mods={[mod("sodium")]} />,
+      );
+      expect(await screen.findByText("sodium")).toBeInTheDocument();
+
+      rerender(<ModpackView {...base} name="New" mods={[mod("iris")]} />);
+
+      expect(await screen.findByText("iris")).toBeInTheDocument();
+      await waitFor(() =>
+        expect(screen.queryByText("sodium")).not.toBeInTheDocument(),
+      );
+      expect(getMod.mock.calls[getMod.mock.calls.length - 1][0]).toMatchObject({
+        id: "iris",
+        modpack: "New",
+      });
+    });
+
+    it("refetches when a mod leaves the pack but not when the list is re-read unchanged", async () => {
+      const { rerender } = render(
+        <ModpackView
+          {...base}
+          name="Pack"
+          mods={[mod("sodium"), mod("iris")]}
+        />,
+      );
+      await waitFor(() => expect(getMod).toHaveBeenCalledTimes(2));
+
+      rerender(
+        <ModpackView
+          {...base}
+          name="Pack"
+          mods={[mod("sodium"), mod("iris")]}
+        />,
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(getMod).toHaveBeenCalledTimes(2);
+
+      rerender(<ModpackView {...base} name="Pack" mods={[mod("sodium")]} />);
+      await waitFor(() => expect(getMod).toHaveBeenCalledTimes(3));
+      await waitFor(() =>
+        expect(screen.queryByText("iris")).not.toBeInTheDocument(),
+      );
+    });
+
+    it("ignores a slow response for the pack it was showing before", async () => {
+      let resolveOld!: (value: IMod) => void;
+      getMod.mockImplementationOnce(
+        () =>
+          new Promise<IMod>((resolve) => {
+            resolveOld = resolve;
+          }),
+      );
+      const { rerender } = render(
+        <ModpackView {...base} name="Old" mods={[mod("sodium")]} />,
+      );
+      await waitFor(() => expect(getMod).toHaveBeenCalledTimes(1));
+
+      rerender(<ModpackView {...base} name="New" mods={[mod("iris")]} />);
+      expect(await screen.findByText("iris")).toBeInTheDocument();
+      await act(async () => resolveOld(fetched("sodium")));
+
+      expect(screen.queryByText("sodium")).not.toBeInTheDocument();
+    });
+  });
 });

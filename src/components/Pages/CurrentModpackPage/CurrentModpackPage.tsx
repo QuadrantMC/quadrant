@@ -55,6 +55,7 @@ export default function CurrentModpackPage() {
         }
       })
       .catch((error) => console.error(error));
+            key={currentModpack.name}
 
     return () => {
       cancelled = true;

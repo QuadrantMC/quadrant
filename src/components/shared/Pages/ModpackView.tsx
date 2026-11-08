@@ -59,7 +59,7 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
     selectUrl: null,
   };
 
-  const updateModpackDetails = async () => {
+  const updateModpackDetails = async (isCancelled: () => boolean) => {
     setMods([]);
     if (!showUpdates) {
       setModCount(0);
@@ -97,6 +97,9 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
       }),
     );
 
+    if (isCancelled()) {
+      return;
+    }
     const validMods = fetchedMods.filter((mod): mod is IMod => mod !== null);
 
     if (validMods.length === 0) {
@@ -214,17 +217,27 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
   };
 
   const { t } = useTranslation();
+  // The cards belong to one pack's contents, so a different pack or a changed
+  // mod list must refetch them. Keyed by content rather than array identity:
+  // the parent re-reads the packs on every folder event.
+  const modsSignature = (localMods ?? [])
+    .map((mod) => `${mod.source}:${mod.id}`)
+    .join(",");
   // A single effect covers mount and toggle changes. A separate mount-only
   // effect used to run alongside it, fetching every mod twice on open.
   useEffect(() => {
+    let cancelled = false;
     if (showIdentify === false) {
       setToIdentify([]);
     }
     if (showUpdates === false) {
       setUpdates([]);
     }
-    updateModpackDetails().catch((e) => console.error(e));
-  }, [showIdentify, showUpdates]);
+    updateModpackDetails(() => cancelled).catch((e) => console.error(e));
+    return () => {
+      cancelled = true;
+    };
+  }, [modpack.name, modsSignature, showIdentify, showUpdates]);
 
   return (
     <div className="w-auto p-4 rounded-4xl flex flex-1 flex-col">
@@ -308,28 +321,26 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
             </div>
           ) : (
             <>
-              {toIdentify.map((mod, index) => {
+              {toIdentify.map((mod) => {
                 return (
-                  <>
-                    <div
-                      key={mod.fileName + index}
-                      className="bg-slate-800 rounded-4xl p-4 my-2"
-                    >
-                      <h1 className="font-bold">{mod.fileName} -&gt;</h1>
-                      <div className="flex flex-row w-full mt-8">
-                        {mod.proposedMods.map((mod, index) => {
-                          return (
-                            <Mod
-                              key={mod.id + index}
-                              className="w-max mx-2"
-                              mod={mod}
-                              modpack={modpack.name}
-                            ></Mod>
-                          );
-                        })}
-                      </div>
+                  <div
+                    key={mod.fileName}
+                    className="bg-slate-800 rounded-4xl p-4 my-2"
+                  >
+                    <h1 className="font-bold">{mod.fileName} -&gt;</h1>
+                    <div className="flex flex-row w-full mt-8">
+                      {mod.proposedMods.map((proposed) => {
+                        return (
+                          <Mod
+                            key={proposed.source + proposed.id}
+                            className="w-max mx-2"
+                            mod={proposed}
+                            modpack={modpack.name}
+                          ></Mod>
+                        );
+                      })}
                     </div>
-                  </>
+                  </div>
                 );
               })}
             </>
@@ -341,10 +352,10 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
             </div>
           ) : (
             <div className="bg-slate-800 p-4 rounded-4xl mr-4 ml-2 mb-12 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
-              {mods.map((mod, index) => {
+              {mods.map((mod) => {
                 return (
                   <Mod
-                    key={index}
+                    key={mod.source + mod.id}
                     className=" "
                     mod={mod}
                     modpack={modpack.name}
@@ -359,10 +370,10 @@ export default function ModpackView({ showBack, ...modpack }: ModpackViewProps) 
           </div>
         ) : (
           <div className="bg-slate-800 p-4 rounded-4xl mr-4 ml-2 mb-12 grid grid-cols-3 2xl:grid-cols-4 gap-6">
-            {updates.map((mod, index) => {
+            {updates.map((mod) => {
               return (
                 <Mod
-                  key={index}
+                  key={mod.source + mod.id}
                   className=" "
                   mod={mod}
                   modpack={modpack.name}
