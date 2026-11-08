@@ -175,6 +175,17 @@ describe("ModInstallPage", () => {
     });
   });
 
+  it("stays installable when the version list cannot load", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    getVersions.mockRejectedValue(new Error("offline"));
+    renderPage({ mod: mod({}) });
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: /Download/ })[0],
+      ).toBeEnabled(),
+    );
+  });
+
   it("hides version and loader pickers when a file is preselected", async () => {
     renderPage({ mod: mod({}), fileId: "abc" });
     await screen.findByText("jellysquid");

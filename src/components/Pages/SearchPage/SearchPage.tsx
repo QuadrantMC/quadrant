@@ -369,7 +369,11 @@ export default function SearchPage() {
         mrEnabled,
         saved,
       ] = await Promise.all([
-        getVersions(),
+        // Live provider request: offline, it must not block the saved filters.
+        getVersions().catch((error) => {
+          console.error(error);
+          return [] as MinecraftVersion[];
+        }),
         getModpacks(),
         configStore.get<boolean>("curseforge"),
         configStore.get<boolean>("modrinth"),

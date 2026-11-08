@@ -198,7 +198,11 @@ export default function ModInstallPage(props: IModInstallPageProps) {
         savedModpack,
         availableLocations,
       ] = await Promise.all([
-        getVersions(),
+        // Live provider request: offline, it must not keep Download disabled.
+        getVersions().catch((error) => {
+          console.error(error);
+          return [] as MinecraftVersion[];
+        }),
         getModpacks(),
         config.get<string>("lastUsedVersion"),
         config.get<string>("lastUsedAPI"),

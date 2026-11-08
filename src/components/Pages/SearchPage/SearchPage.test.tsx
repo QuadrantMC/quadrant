@@ -145,6 +145,35 @@ describe("SearchPage", () => {
     );
   });
 
+  it("restores the saved filters when the version list cannot load", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    getVersions.mockRejectedValue(new Error("offline"));
+    getModpacks.mockResolvedValue([{ name: "Local Pack", mods: [] }]);
+    const saved = {
+      contentType: ModType.ResourcePack,
+      targetModpack: "Local Pack",
+    };
+    storeGet.mockImplementation(async (key: string) =>
+      key === "searchFilters"
+        ? saved
+        : key === "modrinth"
+          ? true
+          : key === "curseforge"
+            ? false
+            : undefined,
+    );
+    render(<SearchPage />);
+
+    // Persistence only switches on once hydration has finished, so a write of
+    // the restored filters proves the boot did not die on the version request.
+    await waitFor(() =>
+      expect(storeSet).toHaveBeenCalledWith(
+        "searchFilters",
+        expect.objectContaining(saved),
+      ),
+    );
+  });
+
   it("submitting the form searches with the typed query", async () => {
     render(<SearchPage />);
     await waitFor(() => expect(searchMods).toHaveBeenCalled());
