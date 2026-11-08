@@ -121,21 +121,28 @@ pub(crate) fn command_error(error: impl Into<anyhow::Error>) -> tauri::Error {
 
 /// Brings the window back for a later launch of either app and opens its
 /// links, as the launch would have.
+/// Brings the window up from the tray or a later launch. A window that is
+/// closing can refuse any step, which is logged instead of panicking the event
+/// loop.
+fn show_window(window: &tauri::WebviewWindow) {
+    if let Err(e) = window.set_enabled(true) {
+        log::error!("Failed to enable window: {e}");
+    }
+    if let Err(e) = window.show() {
+        log::error!("Failed to show window: {e}");
+    }
+    if let Err(e) = window.unminimize() {
+        log::error!("Failed to unminimize window: {e}");
+    }
+    if let Err(e) = window.set_focus() {
+        log::error!("Failed to focus window: {e}");
+    }
+}
+
 fn reveal(app: &tauri::AppHandle, links: &[String]) {
     log::info!("A later launch handed over {links:?}");
     if let Some(window) = app.get_webview_window("main") {
-        if let Err(e) = window.set_enabled(true) {
-            log::error!("Failed to enable window: {e}");
-        }
-        if let Err(e) = window.show() {
-            log::error!("Failed to show window: {e}");
-        }
-        if let Err(e) = window.unminimize() {
-            log::error!("Failed to unminimize window: {e}");
-        }
-        if let Err(e) = window.set_focus() {
-            log::error!("Failed to focus window: {e}");
-        }
+        show_window(&window);
         if let Err(e) = window.center() {
             log::error!("Failed to center window: {e}");
         }
@@ -460,11 +467,7 @@ pub async fn run(launch: Launch) {
                     } = event
                         && let Some(window) = tray.app_handle().get_webview_window("main")
                     {
-                        window.set_enabled(true).unwrap();
-
-                        window.show().unwrap();
-                        window.set_focus().unwrap();
-                        window.unminimize().unwrap();
+                        show_window(&window);
                     }
                 });
                 tray.on_menu_event(|app, event| match event.id.as_ref() {
@@ -473,13 +476,12 @@ pub async fn run(launch: Launch) {
                     }
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
-                            window.set_enabled(true).unwrap();
-                            if window.is_visible().unwrap() {
-                                window.hide().unwrap();
+                            if window.is_visible().unwrap_or(false) {
+                                if let Err(e) = window.hide() {
+                                    log::error!("Failed to hide window: {e}");
+                                }
                             } else {
-                                window.show().unwrap();
-                                window.set_focus().unwrap();
-                                window.unminimize().unwrap();
+                                show_window(&window);
                             }
                         }
                     }
