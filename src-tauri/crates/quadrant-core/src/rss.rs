@@ -8,7 +8,9 @@ use chrono::{DateTime, Days, Utc};
 pub async fn get_news() -> Result<Vec<Article>> {
     log::info!("Fetching RSS news feed");
     let new_qualifier = Utc::now().checked_sub_days(Days::new(14)).unwrap();
-    let content = reqwest::get("https://blog.mrquantumoff.dev/rss/")
+    let content = crate::mc_mod::http::provider_http_client()
+        .get("https://blog.mrquantumoff.dev/rss/")
+        .send()
         .await
         .map_err(|error| anyhow!(error))?
         .bytes()

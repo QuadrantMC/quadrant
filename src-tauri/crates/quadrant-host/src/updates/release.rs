@@ -126,6 +126,7 @@ impl Updater {
         let client = reqwest::Client::builder()
             .user_agent(&self.user_agent)
             .connect_timeout(Duration::from_secs(30))
+            .read_timeout(Duration::from_secs(60))
             .build()?;
         let Some(release) = fetch(&client, &self.urls(channel)).await? else {
             log::info!("No {} release on {channel}", channel.app().name());

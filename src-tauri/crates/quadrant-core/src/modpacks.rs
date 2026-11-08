@@ -1046,7 +1046,11 @@ async fn download_mod_concurrently(
     downloaded_mods: Arc<Mutex<usize>>,
 ) -> Result<String> {
     safe_download_file_name(&mod_.download_url, &mod_.source)?;
-    let response = reqwest::get(&mod_.download_url).await?.error_for_status()?;
+    let response = crate::mc_mod::http::provider_http_client()
+        .get(&mod_.download_url)
+        .send()
+        .await?
+        .error_for_status()?;
     let mut bytes = response.bytes_stream();
     let mut file = std::fs::File::create(file)?;
     let mut hasher = sha2::Sha512::new();

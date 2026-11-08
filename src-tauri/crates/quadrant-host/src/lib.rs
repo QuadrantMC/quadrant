@@ -91,6 +91,10 @@ const SETTINGS_SYNC_INTERVAL_SECS: u64 = 120;
 /// this interval, so a short poll just bounds how late a refresh can fire.
 const TOKEN_REFRESH_CHECK_INTERVAL_SECS: u64 = 60;
 const WS_REPLAY_LIMIT: usize = 500;
+const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// The API pings every 30 seconds, so this much silence means the connection
+/// is gone even though no error reached the socket.
+const WS_READ_TIMEOUT: Duration = Duration::from_secs(90);
 const REFRESH_SYNCED_MODPACKS_EVENT: &str = "refreshSyncedModpacks";
 const MODPACK_SYNC_WARNING_EVENT: &str = "modpackSyncWarning";
 const MODPACK_SYNC_NOTIFICATION_TYPE: &str = "modpack_sync";
@@ -1922,11 +1926,18 @@ impl QuadrantHost {
             .headers_mut()
             .insert("User-Agent", self.inner.options.user_agent.parse()?);
 
-        let (mut socket, _) = connect_async(request).await?;
+        let (mut socket, _) = tokio::time::timeout(WS_CONNECT_TIMEOUT, connect_async(request))
+            .await
+            .map_err(|_| anyhow!("notification websocket connect timed out"))??;
         self.set_reconnect_attempt(0).await;
 
-        while let Some(frame) = socket.next().await {
-            match frame? {
+        loop {
+            let frame = match tokio::time::timeout(WS_READ_TIMEOUT, socket.next()).await {
+                Ok(Some(frame)) => frame?,
+                Ok(None) => return Err(anyhow!("notification websocket stream ended")),
+                Err(_) => return Err(anyhow!("notification websocket went silent")),
+            };
+            match frame {
                 Message::Text(payload) => self.handle_notification_ws_frame(&payload).await?,
                 Message::Close(frame) => {
                     let reason = frame
@@ -1937,8 +1948,6 @@ impl QuadrantHost {
                 Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {}
             }
         }
-
-        Err(anyhow!("notification websocket stream ended"))
     }
 
     async fn handle_notification_ws_frame(&self, payload: &str) -> Result<()> {
