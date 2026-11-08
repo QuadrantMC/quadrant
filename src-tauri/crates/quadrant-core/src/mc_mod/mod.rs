@@ -13,7 +13,7 @@ use crate::{
     ports::{EventSink, SettingsStore},
 };
 
-use cache::{add_cache_index, copy_hashing, file_hash, get_cache_index, init_cache, sha512_hex};
+use cache::{add_cache_index, copy_hashing, file_hash, get_cache_index, sha512_hex};
 #[cfg(feature = "curseforge")]
 use curseforge::{
     download_mod_curseforge, get_latest_mod_version_curseforge, search_mods_curseforge,
@@ -697,16 +697,15 @@ pub async fn get_file(
                 let _ = std::fs::remove_file(&cached_file.file_name);
             }
             Err(error) => {
-                // A missing or unreadable cached file is not fatal: prune the
-                // stale index entry and fall through to a fresh download.
+                // Not fatal: the download below writes the file again under
+                // the same entry.
                 log::warn!(
                     "Cached file for sha1={} is unreadable ({error}); re-downloading",
                     file.sha1
                 );
+                let _ = std::fs::remove_file(&cached_file.file_name);
             }
         }
-        // Never block the async worker here; the index lock is a tokio mutex.
-        init_cache().await?;
     }
 
     log::info!(

@@ -294,6 +294,9 @@ pub async fn run(launch: Launch) {
                     Ok(count) => log::info!("Recorded the file hashes of {count} mod(s)"),
                     Err(error) => log::warn!("Failed to record mod file hashes: {error}"),
                 }
+                if let Err(error) = backfill_host.prune_mod_cache().await {
+                    log::warn!("Failed to prune the mod cache: {error}");
+                }
             });
 
             if let Some(primary) = primary {

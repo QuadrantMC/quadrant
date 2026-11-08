@@ -1,6 +1,7 @@
 //! Local file cache utilities used by mod downloads.
 
 use std::{
+    collections::HashSet,
     io::{Read, Write},
     path::{Path, PathBuf},
 };
@@ -35,57 +36,105 @@ pub struct CacheIndex {
     pub file_name: String,
 }
 
-/// Initializes the cache directory and removes stale cache entries.
-pub async fn init_cache() -> Result<(), anyhow::Error> {
-    let _guard = CACHE_WRITE_LOCK.lock().await;
-    init_cache_locked(&cache_dir())
+const INDEX_FILE: &str = "cacheIndex.json";
+const INDEX_LOCK_FILE: &str = "cacheIndex.json.lock";
+
+/// The index as it is on disk. A missing or unreadable one reads as empty:
+/// cached files only save downloads, and [`init_cache`] sweeps up the files an
+/// unreadable index forgot.
+fn read_index(cache_dir: &Path) -> Vec<CacheIndex> {
+    let raw = match std::fs::read(cache_dir.join(INDEX_FILE)) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => {
+            log::warn!("Can't read the mod cache index: {error}");
+            return Vec::new();
+        }
+    };
+    serde_json::from_slice(&raw).unwrap_or_else(|error| {
+        log::warn!("Ignoring an unreadable mod cache index: {error}");
+        Vec::new()
+    })
 }
 
-// Initialization prunes and rewrites the index, so callers must hold the same
-// lock used by additions and lookups for the entire read/modify/write operation.
-fn init_cache_locked(cache_dir: &Path) -> Result<(), anyhow::Error> {
-    log::info!("Initializing mod cache");
-    if !cache_dir.exists() {
-        std::fs::create_dir_all(&cache_dir)?
+fn write_index(cache_dir: &Path, entries: &[CacheIndex]) -> Result<(), anyhow::Error> {
+    crate::modpacks::write_file_atomically(
+        cache_dir.join(INDEX_FILE),
+        serde_json::to_string_pretty(entries)?,
+    )?;
+    Ok(())
+}
+
+/// Held around every index read-modify-write, after [`CACHE_WRITE_LOCK`]:
+/// Quadrant-Native and the CLI share the cache folder.
+fn lock_index(cache_dir: &Path) -> Result<std::fs::File, anyhow::Error> {
+    std::fs::create_dir_all(cache_dir)?;
+    Ok(crate::modpacks::lock_file(
+        &cache_dir.join(INDEX_LOCK_FILE),
+    )?)
+}
+
+fn remove_cached_file(path: &Path) {
+    if let Err(error) = std::fs::remove_file(path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!("Failed to remove cached file {}: {error}", path.display());
     }
-    let index_file = cache_dir.join("cacheIndex.json");
+}
 
-    if !index_file.exists() {
-        std::fs::write(
-            &index_file,
-            serde_json::to_string_pretty(&Vec::<CacheIndex>::new())?,
-        )?;
-    }
+/// Prunes the cache once, at startup: entries unused for `keep_alive_days`
+/// (the `cacheKeepAlive` setting) with their files, entries whose file is
+/// gone, and files no entry names that are as old. Lookups never prune.
+pub async fn init_cache(keep_alive_days: i64) -> Result<(), anyhow::Error> {
+    let _guard = CACHE_WRITE_LOCK.lock().await;
+    prune_cache(&cache_dir(), keep_alive_days)
+}
 
-    let mut config_raw = std::fs::read_to_string(&index_file)?;
-    if serde_json::from_str::<Vec<CacheIndex>>(&config_raw).is_err() {
-        std::fs::write(
-            &index_file,
-            serde_json::to_string_pretty(&Vec::<CacheIndex>::new())?,
-        )?;
-    }
-
-    config_raw = std::fs::read_to_string(&index_file)?;
-    let mut file_conts = serde_json::from_str::<Vec<CacheIndex>>(&config_raw)?;
-
-    for index in file_conts.clone() {
-        let is_old = Utc::now() - index.last_used_date;
-        let file = PathBuf::from(&index.file_name);
-
-        if is_old.num_days() >= 90 {
-            log::info!("Removing stale cache entry: {}", index.file_name);
-            if file.exists() {
-                std::fs::remove_file(&file)?;
-            }
-            file_conts.retain(|cont| cont.file_hash != index.file_hash);
+fn prune_cache(cache_dir: &Path, keep_alive_days: i64) -> Result<(), anyhow::Error> {
+    log::info!("Pruning the mod cache (keeping files used in the last {keep_alive_days} days)");
+    let keep_alive_days = keep_alive_days.max(1);
+    let _lock = lock_index(cache_dir)?;
+    let now = Utc::now();
+    let mut entries = read_index(cache_dir);
+    entries.retain(|entry| {
+        let file = Path::new(&entry.file_name);
+        let keep = (now - entry.last_used_date).num_days() < keep_alive_days && file.is_file();
+        if !keep {
+            log::info!("Removing stale cache entry: {}", entry.file_name);
+            remove_cached_file(file);
         }
+        keep
+    });
+    write_index(cache_dir, &entries)?;
 
-        if !file.exists() {
-            file_conts.retain(|cont| cont.file_hash != index.file_hash);
+    // Files an unreadable index forgot, or a crash left between writing a
+    // file and indexing it.
+    let indexed: HashSet<_> = entries
+        .iter()
+        .filter_map(|entry| {
+            Path::new(&entry.file_name)
+                .file_name()
+                .map(ToOwned::to_owned)
+        })
+        .collect();
+    let keep_alive = std::time::Duration::from_secs(keep_alive_days as u64 * 24 * 60 * 60);
+    for entry in std::fs::read_dir(cache_dir)?.flatten() {
+        let name = entry.file_name();
+        if indexed.contains(&name) || name == INDEX_FILE || name == INDEX_LOCK_FILE {
+            continue;
+        }
+        let is_old = entry
+            .metadata()
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= keep_alive);
+        if is_old {
+            log::info!("Removing unindexed cache file: {}", entry.path().display());
+            remove_cached_file(&entry.path());
         }
     }
-
-    std::fs::write(index_file, serde_json::to_string_pretty(&file_conts)?)?;
     Ok(())
 }
 
@@ -128,25 +177,16 @@ pub(crate) fn file_sha512(path: &Path) -> std::io::Result<String> {
     copy_hashing(&mut std::fs::File::open(path)?, &mut std::io::sink())
 }
 
-/// Looks up a cached file by content hash.
+/// Looks up a cached file by content hash. Read-only: the index is written
+/// atomically, so it needs no lock.
 pub async fn get_cache_index(file_hash: String) -> Result<Option<CacheIndex>, anyhow::Error> {
-    let _guard = CACHE_WRITE_LOCK.lock().await;
-    let cache_dir = cache_dir();
-    init_cache_locked(&cache_dir)?;
-    let cache_config = cache_dir.join("cacheIndex.json");
-    let config_raw = std::fs::read_to_string(cache_config)?;
-    let file_conts: Vec<CacheIndex> = serde_json::from_str(&config_raw)?;
-    let file_conts: Vec<CacheIndex> = file_conts
+    Ok(read_index(&cache_dir())
         .into_iter()
-        .filter(|index| index.file_hash == file_hash)
-        .collect();
-    if file_conts.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(file_conts[0].clone()))
+        .find(|index| index.file_hash == file_hash && Path::new(&index.file_name).is_file()))
 }
 
-/// Stores a file in the shared cache or refreshes an existing cache entry.
+/// Stores a file in the shared cache or refreshes an existing cache entry,
+/// writing the file again when its entry outlived it.
 pub async fn add_cache_index(
     file_name: String,
     file_bytes: &[u8],
@@ -154,49 +194,46 @@ pub async fn add_cache_index(
 ) -> Result<PathBuf, anyhow::Error> {
     let _guard = CACHE_WRITE_LOCK.lock().await;
     let cache_dir = cache_dir();
-    let cache_config = cache_dir.join("cacheIndex.json");
-    if !cache_config.exists() {
-        init_cache_locked(&cache_dir)?;
-    }
-    let config_raw = std::fs::read_to_string(&cache_config)?;
-    let mut file_conts: Vec<CacheIndex> = serde_json::from_str(&config_raw)?;
+    let _lock = lock_index(&cache_dir)?;
+    let mut entries = read_index(&cache_dir);
 
-    let exists = file_conts
-        .iter()
-        .filter(|index| index.file_hash == file_hash)
-        .collect::<Vec<&CacheIndex>>();
-    let file_path: PathBuf;
-    if !exists.is_empty() {
-        log::info!("Cache entry for hash {file_hash} already exists, refreshing last-used date");
-        file_path = PathBuf::from(exists[0].file_name.clone());
-        let index = file_conts
-            .iter()
-            .position(|index| index.file_hash == file_hash)
-            .unwrap();
-        file_conts[index].last_used_date = Utc::now();
-    } else {
-        log::info!("Adding new cache entry: {file_name} (hash={file_hash})");
-        let safe_name = PathBuf::from(file_name)
-            .file_name()
-            .ok_or_else(|| anyhow::anyhow!("Invalid cache file name"))?
-            .to_string_lossy()
-            .to_string();
-        // Content-address the on-disk name so provider files with identical
-        // names cannot overwrite one another in the shared cache.
-        let new_file = cache_dir.join(format!(
-            "{}-{safe_name}",
-            &file_hash[..12.min(file_hash.len())]
-        ));
-        std::fs::write(&new_file, file_bytes)?;
-        file_conts.push(CacheIndex {
-            last_used_date: Utc::now(),
-            file_hash,
-            file_name: new_file.to_string_lossy().to_string(),
-        });
-        file_path = new_file;
+    let file_path = match entries
+        .iter_mut()
+        .find(|index| index.file_hash == file_hash)
+    {
+        Some(existing) => {
+            log::info!(
+                "Cache entry for hash {file_hash} already exists, refreshing last-used date"
+            );
+            existing.last_used_date = Utc::now();
+            PathBuf::from(&existing.file_name)
+        }
+        None => {
+            log::info!("Adding new cache entry: {file_name} (hash={file_hash})");
+            let safe_name = PathBuf::from(file_name)
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("Invalid cache file name"))?
+                .to_string_lossy()
+                .to_string();
+            // Content-address the on-disk name so provider files with identical
+            // names cannot overwrite one another in the shared cache.
+            let new_file = cache_dir.join(format!(
+                "{}-{safe_name}",
+                &file_hash[..12.min(file_hash.len())]
+            ));
+            entries.push(CacheIndex {
+                last_used_date: Utc::now(),
+                file_hash,
+                file_name: new_file.to_string_lossy().to_string(),
+            });
+            new_file
+        }
+    };
+    if !file_path.is_file() {
+        crate::modpacks::write_file_atomically(&file_path, file_bytes)?;
     }
 
-    std::fs::write(cache_config, serde_json::to_string_pretty(&file_conts)?)?;
+    write_index(&cache_dir, &entries)?;
     Ok(file_path)
 }
 
@@ -302,7 +339,7 @@ pub(crate) mod tests {
         }
         std::fs::write(&index_file, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
 
-        init_cache().await.unwrap();
+        init_cache(30).await.unwrap();
 
         assert!(fresh.exists());
         assert!(!stale.exists());
@@ -321,19 +358,99 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn init_cache_recovers_from_corrupt_index() {
+    async fn a_corrupt_index_reads_as_empty_and_its_old_files_are_swept() {
         let _guard = set_cache_dir();
-        init_cache().await.unwrap();
-        let dir = std::path::PathBuf::from(std::env::var("QUADRANT_TEST_CACHE_DIR").unwrap());
+        let forgotten = add_cache_index("old.jar".to_string(), b"old", file_hash(b"old"))
+            .await
+            .unwrap();
+        let dir = super::cache_dir();
         std::fs::write(dir.join("cacheIndex.json"), "{not json").unwrap();
+        age_file(&forgotten, 40);
+        let stray = dir.join("fresh-stray.jar");
+        std::fs::write(&stray, b"stray").unwrap();
 
-        init_cache().await.unwrap();
+        assert!(get_cache_index(file_hash(b"old")).await.unwrap().is_none());
+        let added = add_cache_index("new.jar".to_string(), b"new", file_hash(b"new"))
+            .await
+            .unwrap();
+        init_cache(30).await.unwrap();
+
+        assert!(!forgotten.exists());
+        assert!(stray.exists(), "a recent file may be mid-indexing");
+        assert!(added.exists());
+        assert!(get_cache_index(file_hash(b"new")).await.unwrap().is_some());
+    }
+
+    fn age_file(path: &std::path::Path, days: u64) {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(days * 24 * 60 * 60),
+        )
+        .unwrap();
+    }
+
+    fn set_last_used(days_ago: u64) {
+        let index_file = super::cache_dir().join("cacheIndex.json");
+        let mut entries: Vec<CacheIndex> =
+            serde_json::from_str(&std::fs::read_to_string(&index_file).unwrap()).unwrap();
+        for entry in &mut entries {
+            entry.last_used_date = Utc::now().checked_sub_days(Days::new(days_ago)).unwrap();
+        }
+        std::fs::write(&index_file, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_cache_keeps_files_for_the_keep_alive_setting() {
+        let _guard = set_cache_dir();
+        let path = add_cache_index("mod.jar".to_string(), b"mod", file_hash(b"mod"))
+            .await
+            .unwrap();
+        set_last_used(40);
+
+        init_cache(90).await.unwrap();
+        assert!(path.exists());
+        init_cache(30).await.unwrap();
+        assert!(!path.exists());
+        assert!(get_cache_index(file_hash(b"mod")).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn lookups_never_rewrite_or_prune_the_index() {
+        let _guard = set_cache_dir();
+        let path = add_cache_index("mod.jar".to_string(), b"mod", file_hash(b"mod"))
+            .await
+            .unwrap();
+        set_last_used(400);
+        let index_file = super::cache_dir().join("cacheIndex.json");
+        let before = std::fs::read(&index_file).unwrap();
+
+        assert!(get_cache_index(file_hash(b"mod")).await.unwrap().is_some());
         assert!(
-            get_cache_index(file_hash(b"anything"))
+            get_cache_index(file_hash(b"other"))
                 .await
                 .unwrap()
                 .is_none()
         );
+
+        assert_eq!(std::fs::read(&index_file).unwrap(), before);
+        assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn an_entry_whose_file_is_gone_gets_the_file_again() {
+        let _guard = set_cache_dir();
+        let path = add_cache_index("mod.jar".to_string(), b"mod", file_hash(b"mod"))
+            .await
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert!(get_cache_index(file_hash(b"mod")).await.unwrap().is_none());
+        let again = add_cache_index("mod.jar".to_string(), b"mod", file_hash(b"mod"))
+            .await
+            .unwrap();
+
+        assert_eq!(again, path);
+        assert_eq!(std::fs::read(&path).unwrap(), b"mod");
     }
 
     #[test]
@@ -358,7 +475,7 @@ pub(crate) mod tests {
                             )
                             .await
                             .unwrap();
-                            init_cache().await.unwrap();
+                            init_cache(30).await.unwrap();
                             let entry = get_cache_index(hash)
                                 .await
                                 .unwrap()

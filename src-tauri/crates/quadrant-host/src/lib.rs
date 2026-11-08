@@ -615,6 +615,17 @@ impl QuadrantHost {
         backfill_mod_hashes(&self.get_minecraft_folder()?).await
     }
 
+    /// Prunes the shared mod cache by the `cacheKeepAlive` setting (days).
+    /// Hosts run it once in the background at launch; lookups never prune.
+    pub async fn prune_mod_cache(&self) -> Result<()> {
+        let keep_alive_days = self
+            .inner
+            .config_store
+            .get_i64("cacheKeepAlive")?
+            .unwrap_or(quadrant_core::config::default_app_config().cache_keep_alive);
+        quadrant_core::mc_mod::cache::init_cache(keep_alive_days).await
+    }
+
     pub fn frontend_apply_modpack(&self, name: String) -> Result<()> {
         apply_modpack(&self.get_minecraft_folder()?, &name)
     }
