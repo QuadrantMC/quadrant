@@ -463,6 +463,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn get_quadrant_settings_skips_invalid_values_and_still_applies_the_rest() {
         let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
         let server = MockServer::start();
