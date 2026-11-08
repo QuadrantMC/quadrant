@@ -157,7 +157,9 @@ describe("SharedModpackView", () => {
       render(<SharedModpackView modpack={risky} />);
 
       const alert = screen.getAllByRole("alert")[0];
-      expect(within(alert).getByText(/can't verify these files/i)).toBeVisible();
+      expect(
+        within(alert).getByText(/can't verify these files/i),
+      ).toBeVisible();
       expect(within(alert).getByText("Old Mod")).toBeVisible();
       expect(
         within(alert).getByText(/not from Modrinth or CurseForge/i),
@@ -223,7 +225,7 @@ describe("SharedModpackView", () => {
       expect(installModpack).not.toHaveBeenCalled();
     });
 
-    it("installs without asking for a pack from the user's own cloud", async () => {
+    it("installs without asking over a local pack that has no cloud link yet", async () => {
       render(
         <SharedModpackView
           modpack={pack}
@@ -231,6 +233,43 @@ describe("SharedModpackView", () => {
         />,
       );
       await userEvent.click(screen.getByRole("button", { name: "Download" }));
+      await waitFor(() => expect(installModpack).toHaveBeenCalledWith(pack));
+    });
+
+    it("installs without asking over the local copy of the same cloud pack", async () => {
+      getModpacks.mockResolvedValue([
+        { name: "Shared pack", version: "1.20.1", mods: [], modpackId: "id" },
+      ]);
+      render(
+        <SharedModpackView
+          modpack={pack}
+          syncTarget={{ syncedAt: 1, modpackId: "id" }}
+        />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Download" }));
+      await waitFor(() => expect(installModpack).toHaveBeenCalledWith(pack));
+    });
+
+    it("asks before replacing a pack linked to a different cloud pack", async () => {
+      getModpacks.mockResolvedValue([
+        {
+          name: "shared PACK",
+          version: "1.20.1",
+          mods: [],
+          modpackId: "mine",
+        },
+      ]);
+      render(
+        <SharedModpackView
+          modpack={pack}
+          syncTarget={{ syncedAt: 1, modpackId: "friends" }}
+        />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Download" }));
+      expect(await screen.findByText(/already have a modpack/i)).toBeVisible();
+      expect(installModpack).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByRole("button", { name: "Replace" }));
       await waitFor(() => expect(installModpack).toHaveBeenCalledWith(pack));
     });
   });

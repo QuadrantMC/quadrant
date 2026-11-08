@@ -5,8 +5,7 @@ import { IMod, InstalledModpack } from "../../../intefaces";
 import { useTranslation } from "react-i18next";
 import Button from "../../core/Button";
 import CancelButton from "../../core/CancelButton";
-import ConfirmDialog from "../../core/ConfirmDialog";
-import { getMod, getModpacks } from "../../../tools";
+import { getMod } from "../../../tools";
 import Mod from "../../shared/Mod";
 import { ContentContext } from "../../../intefaces";
 import { MdDownload } from "react-icons/md";
@@ -35,29 +34,6 @@ export default function SharedModpackView({
   // Online mods have no provider page, so the cards below can't show them;
   // the warnings list them with their hosts.
   const review = useMemo(() => reviewMods(modpack.mods), [modpack.mods]);
-  const [isReplaceOpen, setIsReplaceOpen] = useState(false);
-
-  // An install writes to the folder named after the pack, so a same-named
-  // local pack would silently lose its mods, version and loader. A pack from
-  // the user's own Quadrant Sync is the explicit exception: it is meant to
-  // replace its local copy.
-  const startInstall = async () => {
-    if (!syncTarget) {
-      const taken = await getModpacks(false)
-        .then((locals) =>
-          locals.some(
-            (local) => local.name.toLowerCase() === modpack.name.toLowerCase(),
-          ),
-        )
-        // The install reports the same failure to the user.
-        .catch(() => false);
-      if (taken) {
-        setIsReplaceOpen(true);
-        return;
-      }
-    }
-    await install();
-  };
 
   useEffect(() => {
     let cancelled = false;
@@ -120,7 +96,7 @@ export default function SharedModpackView({
                 ? "bg-emerald-600 hover:bg-emerald-700"
                 : "bg-slate-800 cursor-not-allowed")
             }
-            onClick={startInstall}
+            onClick={install}
           >
             {progress === 1 ? t("download") : (progress * 100).toFixed(2) + "%"}
             <MdDownload aria-hidden="true" className="w-6 h-6 ml-2" />
@@ -148,14 +124,6 @@ export default function SharedModpackView({
         )}
       </section>
       {reviewDialog}
-      <ConfirmDialog
-        open={isReplaceOpen}
-        title={t("replaceModpackQuestion", { name: modpack.name })}
-        message={t("replaceModpackText", { name: modpack.name })}
-        confirmLabel={t("replace")}
-        onCancel={() => setIsReplaceOpen(false)}
-        onConfirm={install}
-      />
       {mods.length > 0 && (
         <div className="grid min-w-0 grid-cols-1 gap-4 rounded-4xl bg-slate-800 p-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {mods.map((mod) => (
