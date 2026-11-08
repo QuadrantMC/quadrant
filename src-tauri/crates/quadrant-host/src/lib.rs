@@ -91,6 +91,7 @@ const SETTINGS_SYNC_INTERVAL_SECS: u64 = 120;
 /// this interval, so a short poll just bounds how late a refresh can fire.
 const TOKEN_REFRESH_CHECK_INTERVAL_SECS: u64 = 60;
 const WS_REPLAY_LIMIT: usize = 500;
+const NOTIFICATION_HISTORY_LIMIT: usize = WS_REPLAY_LIMIT;
 const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// The API pings every 30 seconds, so this much silence means the connection
 /// is gone even though no error reached the socket.
@@ -2360,7 +2361,6 @@ impl QuadrantHost {
 struct NotificationRuntimeState {
     by_key: HashMap<String, Notification>,
     key_by_notification_id: HashMap<String, String>,
-    ordered_keys: Vec<String>,
     processed_modpack_sync_by_key: HashMap<String, String>,
     cursor: NotificationCursor,
 }
@@ -2398,18 +2398,39 @@ impl NotificationRuntimeState {
                 }
                 self.key_by_notification_id
                     .insert(notification.notification_id.clone(), identity_key);
-                self.sort_keys();
                 UpsertOutcome { changed: true }
             }
             None => {
-                self.ordered_keys.push(identity_key.clone());
                 self.by_key
                     .insert(identity_key.clone(), notification.clone());
                 self.key_by_notification_id
                     .insert(notification.notification_id.clone(), identity_key);
-                self.sort_keys();
+                if self.by_key.len() > NOTIFICATION_HISTORY_LIMIT {
+                    self.forget_oldest();
+                }
                 UpsertOutcome { changed: true }
             }
+        }
+    }
+
+    /// Keeps a long session from growing the list without bound: the server
+    /// replays no more than this many on a reconnect either.
+    fn forget_oldest(&mut self) {
+        let Some(oldest_key) = self
+            .by_key
+            .iter()
+            .min_by(|(_, left), (_, right)| {
+                left.created_at_unix
+                    .cmp(&right.created_at_unix)
+                    .then_with(|| left.notification_id.cmp(&right.notification_id))
+            })
+            .map(|(key, _)| key.clone())
+        else {
+            return;
+        };
+        if let Some(oldest) = self.by_key.remove(&oldest_key) {
+            self.key_by_notification_id
+                .remove(oldest.notification_id.as_str());
         }
     }
 
@@ -2428,12 +2449,7 @@ impl NotificationRuntimeState {
     }
 
     fn notifications_for_ui(&self) -> Vec<Notification> {
-        let mut notifications = self
-            .ordered_keys
-            .iter()
-            .filter_map(|key| self.by_key.get(key))
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut notifications = self.by_key.values().cloned().collect::<Vec<_>>();
         notifications.sort_by(|a, b| {
             b.created_at_unix
                 .cmp(&a.created_at_unix)
@@ -2462,21 +2478,6 @@ impl NotificationRuntimeState {
                 notification_id: Some(notification.notification_id.clone()),
             };
         }
-    }
-
-    fn sort_keys(&mut self) {
-        self.ordered_keys.sort_by(|left, right| {
-            let left_notification = self.by_key.get(left).expect("missing notification");
-            let right_notification = self.by_key.get(right).expect("missing notification");
-            left_notification
-                .created_at_unix
-                .cmp(&right_notification.created_at_unix)
-                .then_with(|| {
-                    left_notification
-                        .notification_id
-                        .cmp(&right_notification.notification_id)
-                })
-        });
     }
 
     fn should_process_modpack_sync_notification(&self, notification: &Notification) -> bool {
@@ -3135,6 +3136,29 @@ mod tests {
                 notification_id: Some("n2".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn notification_state_keeps_only_the_newest_history() {
+        let mut state = NotificationRuntimeState::default();
+        let total = super::NOTIFICATION_HISTORY_LIMIT + 5;
+        merge_notifications_and_collect_updates(
+            &mut state,
+            (0..total)
+                .rev()
+                .map(|index| notification(&format!("n{index:04}"), index as i64, false))
+                .collect(),
+        );
+
+        let notifications = state.notifications_for_ui();
+        assert_eq!(notifications.len(), super::NOTIFICATION_HISTORY_LIMIT);
+        assert_eq!(
+            notifications[0].notification_id,
+            format!("n{:04}", total - 1)
+        );
+        assert_eq!(notifications.last().unwrap().notification_id, "n0005");
+        assert!(!state.mark_read("n0004"));
+        assert!(state.mark_read("n0005"));
     }
 
     #[test]
