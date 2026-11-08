@@ -694,6 +694,7 @@ mod tests {
             is_applied,
             last_synced,
             modpack_id: None,
+            manifest_error: None,
         }
     }
 

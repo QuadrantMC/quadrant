@@ -182,6 +182,7 @@ pub async fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<Local
                 last_synced,
                 modpack_id: None,
                 unknown_mods: true,
+                manifest_error: None,
             });
             continue;
         }
@@ -217,18 +218,17 @@ pub async fn get_modpacks(mc_folder: &Path, hide_free: bool) -> Result<Vec<Local
             });
         if let Err(error) = &parsed {
             log::warn!("Modpack \"{name}\" has an unreadable manifest: {error}");
-            modpacks.push(LocalModpack::from((
-                InstalledModpack {
-                    mod_config_version: String::new(),
-                    quadrant_version: String::new(),
-                    mod_loader: ModLoader::Unknown,
-                    name,
-                    version: "1.12.2".to_string(),
-                    mods: Vec::new(),
-                },
+            modpacks.push(LocalModpack {
+                name,
+                version: "-".to_string(),
+                mods: Vec::new(),
+                mod_loader: ModLoader::Unknown,
                 is_applied,
                 last_synced,
-            )));
+                modpack_id,
+                unknown_mods: true,
+                manifest_error: Some(error.to_string()),
+            });
             continue;
         }
 
@@ -453,6 +453,7 @@ pub fn update_modpack(
         .find(|modpack| modpack.name == modpack_source)
         .cloned()
         .ok_or_else(|| anyhow::Error::from(crate::error::ErrorCode::ModpackMissing))?;
+    modpack.ensure_manifest_readable()?;
     let modpack_folder = modpack_path(mc_folder, modpack_source);
     let original_name = modpack.name.clone();
 
@@ -542,6 +543,7 @@ pub async fn register_mod(
         .find(|modpack| modpack.name == modpack_name)
         .cloned()
         .ok_or_else(|| anyhow::Error::from(crate::error::ErrorCode::ModpackMissing))?;
+    modpack.ensure_manifest_readable()?;
 
     if modpack.mods.iter().any(|existing| existing.id == mod_.id) {
         return Err(anyhow::Error::from(
@@ -584,6 +586,7 @@ pub fn delete_mod(
         .find(|modpack| modpack.name == modpack_name)
         .cloned()
         .ok_or_else(|| anyhow::Error::from(crate::error::ErrorCode::ModpackMissing))?;
+    modpack.ensure_manifest_readable()?;
 
     let modpack_folder = modpack_path(mc_folder, modpack_name);
     let to_delete_ids: Vec<_> = modpack
@@ -631,6 +634,23 @@ pub fn delete_mod(
         serde_json::to_string_pretty(&InstalledModpack::from(modpack.clone()))?,
     )?;
     Ok(modpack)
+}
+
+/// Fails when the named pack has a manifest that does not parse, so a caller
+/// holding a listing from elsewhere cannot push it over the real one.
+pub fn check_manifest_readable(mc_folder: &Path, name: &str) -> Result<()> {
+    validate_modpack_name(name)?;
+    let folder = modpack_path(mc_folder, name);
+    let manifest = ["modConfigV2.json", "modConfig.json"]
+        .into_iter()
+        .map(|file| folder.join(file))
+        .find(|path| path.exists());
+    let Some(manifest) = manifest else {
+        return Ok(());
+    };
+    serde_json::from_slice::<InstalledModpack>(&std::fs::read(manifest)?)
+        .map(drop)
+        .map_err(|error| crate::models::unreadable_manifest(name, error))
 }
 
 /// Persists the sync metadata for a modpack.
@@ -685,9 +705,14 @@ pub async fn install_modpack(
     let modpack_folder = modpack_path(mc_folder, &mod_config.name);
     std::fs::create_dir_all(&modpack_folder)?;
     let old_manifest = modpack_folder.join("modConfigV2.json");
-    let old_mod_config = std::fs::read_to_string(&old_manifest)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<InstalledModpack>(&raw).ok());
+    let old_mod_config = match std::fs::read_to_string(&old_manifest) {
+        Ok(raw) => Some(
+            serde_json::from_str::<InstalledModpack>(&raw)
+                .map_err(|error| crate::models::unreadable_manifest(&mod_config.name, error))?,
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
 
     for mod_ in &mut mod_config.mods {
         if mod_.name.is_empty() && mod_.source != ModSource::Online {
@@ -1646,6 +1671,68 @@ mod tests {
         delete_modpack(&mc_folder, &listed, "alpha").unwrap();
         assert!(!mc_folder.join("mods").is_symlink());
         assert!(!modpack_path(&mc_folder, "alpha").exists());
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_manifest_is_listed_as_broken_and_never_rewritten() {
+        let (_dir, mc_folder) = setup_mc_folder();
+        create_modpack(&mc_folder, &[], "alpha", "1.20.1", ModLoader::Fabric).unwrap();
+        let folder = modpack_path(&mc_folder, "alpha");
+        let manifest = folder.join("modConfigV2.json");
+        // A loader label from a newer Quadrant is as unreadable as a typo.
+        let damaged = r#"{"name":"alpha","version":"1.21","modLoader":"Paper","mods":[]}"#;
+        std::fs::write(&manifest, damaged).unwrap();
+        set_modpack_sync_date(&mc_folder, 42, "alpha", Some("modpack-1")).unwrap();
+
+        let listed = get_modpacks(&mc_folder, false).await.unwrap();
+        let broken = &listed[0];
+        assert!(broken.manifest_error.is_some());
+        assert!(broken.mods.is_empty());
+        assert_eq!(broken.modpack_id.as_deref(), Some("modpack-1"));
+
+        let refused = |result: Result<()>| {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("can't read"), "{error}");
+        };
+        refused(
+            update_modpack(
+                &mc_folder,
+                &listed,
+                "alpha",
+                None,
+                Some("1.21".to_string()),
+                None,
+            )
+            .map(drop),
+        );
+        refused(
+            register_mod(
+                &mc_folder,
+                &listed,
+                online_mod("mod", "https://example.invalid/mod.jar".to_string()),
+                "alpha",
+            )
+            .await,
+        );
+        refused(delete_mod(&mc_folder, &listed, "alpha", "mod").map(drop));
+        refused(check_manifest_readable(&mc_folder, "alpha"));
+        refused(
+            install_modpack(
+                &mc_folder,
+                InstalledModpack {
+                    mod_config_version: "2".to_string(),
+                    quadrant_version: String::new(),
+                    name: "alpha".to_string(),
+                    version: "1.21".to_string(),
+                    mod_loader: ModLoader::Fabric,
+                    mods: Vec::new(),
+                },
+                &MemoryStore::default(),
+                &CollectingEvents::default(),
+            )
+            .await,
+        );
+        assert_eq!(std::fs::read_to_string(&manifest).unwrap(), damaged);
     }
 
     #[tokio::test]

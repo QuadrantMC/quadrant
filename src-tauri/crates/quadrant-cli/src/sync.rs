@@ -258,6 +258,7 @@ mod tests {
             is_applied: false,
             last_synced: 0,
             modpack_id: id.map(str::to_string),
+            manifest_error: None,
         }
     }
 

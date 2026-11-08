@@ -48,8 +48,9 @@ use quadrant_core::{
     },
     models::{Article, InstalledMod, InstalledModpack, LocalModpack, ModLoader, ModSource},
     modpacks::{
-        apply_modpack, create_modpack, delete_mod, delete_modpack, export_modpack_to, get_modpacks,
-        install_modpack, register_mod, set_modpack_sync_date, update_modpack,
+        apply_modpack, check_manifest_readable, create_modpack, delete_mod, delete_modpack,
+        export_modpack_to, get_modpacks, install_modpack, register_mod, set_modpack_sync_date,
+        update_modpack,
     },
     ports::{EventSink, SecretStore, SettingsStore},
     prism::{self, PrismInstance, PrismSyncPlan},
@@ -596,6 +597,7 @@ impl QuadrantHost {
     ) -> Result<()> {
         let instances_dir = self.require_prism_instances_dir()?;
         let modpack = self.require_modpack(&name).await?;
+        modpack.ensure_manifest_readable()?;
 
         let instance_dir = prism::resolve_instance_dir(&instances_dir, &instance_id)?;
         let pack = prism::read_pack_manifest(&instance_dir)?;
@@ -1181,6 +1183,8 @@ impl QuadrantHost {
     }
 
     pub async fn sync_modpack(&self, modpack: LocalModpack, overwrite: bool) -> Result<()> {
+        modpack.ensure_manifest_readable()?;
+        check_manifest_readable(&self.get_minecraft_folder()?, &modpack.name)?;
         let connection_id = {
             let runtime = self.inner.runtime_state.lock().await;
             runtime.notification_connection_id.clone()
@@ -1243,6 +1247,7 @@ impl QuadrantHost {
             .into_iter()
             .find(|modpack| modpack.name == modpack_name)
             .ok_or_else(|| anyhow::Error::from(quadrant_core::error::ErrorCode::ModpackMissing))?;
+        modpack.ensure_manifest_readable()?;
         self.share_modpack_raw(modpack.into()).await
     }
 
@@ -2836,6 +2841,7 @@ mod tests {
             is_applied: false,
             last_synced,
             modpack_id: Some("modpack-7".to_string()),
+            manifest_error: None,
         }
     }
 
@@ -2981,6 +2987,33 @@ mod tests {
         host.maybe_auto_sync_updated_modpack(Some(local_modpack(0)))
             .await
             .unwrap();
+    }
+
+    /// The listing the renderer sends can predate the damage, so the push
+    /// checks the file itself, before it needs an account.
+    #[tokio::test]
+    async fn a_pack_with_an_unreadable_manifest_is_never_pushed() {
+        let temp_dir = tempdir().unwrap();
+        let (host, mc_folder) = sync_host(temp_dir.path());
+        fs::write(
+            modpack_path(&mc_folder, "pack").join("modConfigV2.json"),
+            "{not json",
+        )
+        .unwrap();
+
+        let error = host
+            .sync_modpack(local_modpack(1_762_000_000_000), false)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("can't read"), "{error}");
+
+        let listed = host.get_modpacks(false).await.unwrap();
+        let error = host
+            .sync_modpack(listed[0].clone(), true)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("can't read"), "{error}");
+        assert!(host.share_modpack("pack".to_string()).await.is_err());
     }
 
     #[test]

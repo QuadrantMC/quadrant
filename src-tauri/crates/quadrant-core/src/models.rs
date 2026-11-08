@@ -275,6 +275,28 @@ pub struct LocalModpack {
     pub last_synced: i64,
     /// Stable synced modpack identifier when this modpack is linked to Quadrant Sync.
     pub modpack_id: Option<String>,
+    /// Why the manifest could not be read. Such a pack lists no mods because
+    /// none could be read, not because it has none, so nothing may write or
+    /// sync it until the file parses again.
+    #[serde(default)]
+    pub manifest_error: Option<String>,
+}
+
+impl LocalModpack {
+    /// Refuses a change to a pack whose manifest could not be read, which
+    /// would otherwise replace the real file with this empty listing.
+    pub fn ensure_manifest_readable(&self) -> crate::Result<()> {
+        match &self.manifest_error {
+            Some(error) => Err(unreadable_manifest(&self.name, error)),
+            None => Ok(()),
+        }
+    }
+}
+
+pub(crate) fn unreadable_manifest(name: &str, error: impl std::fmt::Display) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Quadrant can't read the modConfigV2.json of \"{name}\" ({error}). Fix or remove it before changing or syncing this modpack."
+    )
 }
 
 impl From<LocalModpack> for InstalledModpack {
@@ -311,6 +333,7 @@ impl From<(InstalledModpack, bool, i64)> for LocalModpack {
             last_synced: modpack.2,
             modpack_id: None,
             unknown_mods: false,
+            manifest_error: None,
         }
     }
 }
@@ -727,6 +750,7 @@ mod tests {
             is_applied: true,
             last_synced: 99,
             modpack_id: Some("pack-1".to_string()),
+            manifest_error: None,
         };
         let installed = InstalledModpack::from(local);
         assert_eq!(installed.mod_config_version, "2");
