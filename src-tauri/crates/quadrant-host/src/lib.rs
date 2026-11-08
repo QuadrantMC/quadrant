@@ -3355,15 +3355,24 @@ mod tests {
         manifest
     }
 
+    /// A named entry, so listing and installing never look its name up on
+    /// Modrinth.
+    fn named_modrinth_mod(id: &str) -> InstalledMod {
+        InstalledMod {
+            name: id.to_string(),
+            ..InstalledMod::minimal(
+                id.to_string(),
+                ModSource::Modrinth,
+                format!("https://cdn.modrinth.com/data/{id}.jar"),
+            )
+        }
+    }
+
     #[tokio::test]
     async fn an_automatic_update_with_online_mods_waits_for_the_user() {
         let temp_dir = tempdir().unwrap();
         let (host, mc_folder) = sync_host(temp_dir.path());
-        let kept = InstalledMod::minimal(
-            "kept".to_string(),
-            ModSource::Modrinth,
-            "https://cdn.modrinth.com/kept.jar".to_string(),
-        );
+        let kept = named_modrinth_mod("kept");
         let manifest = seed_synced_pack(&host, &mc_folder, vec![kept.clone()]);
         let mut events = host.subscribe_events();
         let local = host.get_modpacks(false).await.unwrap().remove(0);
@@ -3398,6 +3407,45 @@ mod tests {
         );
         let listed = host.get_modpacks(false).await.unwrap();
         assert_eq!(listed[0].last_synced, 1_762_000_000_000);
+    }
+
+    #[tokio::test]
+    async fn an_automatic_update_with_unhashed_mods_is_applied_with_a_warning() {
+        let temp_dir = tempdir().unwrap();
+        let (host, mc_folder) = sync_host(temp_dir.path());
+        let added = named_modrinth_mod("added");
+        // The file is already in the pack under the same download, so the
+        // install needs no network. The listing below predates the entry,
+        // so the review sees it as new.
+        let mut local = host.get_modpacks(false).await.unwrap().remove(0);
+        seed_synced_pack(&host, &mc_folder, vec![added.clone()]);
+        fs::write(modpack_path(&mc_folder, "pack").join("added.jar"), b"jar").unwrap();
+        local.last_synced = 1_762_000_000_000;
+        let mut events = host.subscribe_events();
+
+        host.maybe_apply_remote_modpack_update(&local, &synced_modpack(&[added]))
+            .await
+            .unwrap();
+
+        let warning = loop {
+            let envelope = events.recv().await.unwrap();
+            if envelope.event == "modpackSyncWarning" {
+                break envelope.payload;
+            }
+        };
+        assert_eq!(
+            warning,
+            json!({
+                "modpackId": "modpack-7",
+                "name": "pack",
+                "applied": true,
+                "onlineMods": [],
+                "unverifiedMods": ["added"],
+            })
+        );
+        let listed = host.get_modpacks(false).await.unwrap();
+        assert_eq!(listed[0].last_synced, 1_762_000_100_000);
+        assert!(listed[0].mods[0].sha512.is_some());
     }
 
     #[tokio::test]
