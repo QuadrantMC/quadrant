@@ -23,9 +23,9 @@ export interface SyncedModpackProps {
   accountInfo: AccountInfo | null;
 }
 
-/** A Quadrant Sync modpack that is not installed locally. */
 const SharedModpackView = lazy(() => import("./SharedModpackView"));
 
+/** A Quadrant Sync modpack that is not installed locally. */
 export default function SyncedModpackComponent({
   modpack,
   accountInfo,
