@@ -23,6 +23,7 @@ import {
 } from "./intefaces";
 import {
   createDesktopStore,
+  emit,
   invoke,
   openDialog,
   openExternal,
@@ -400,6 +401,9 @@ export const exportModpack = async (name: string) => {
   if (typeof destination !== "string" || destination.length === 0) {
     return;
   }
+  // An export can finish with its first event, so the shell can't tell a new
+  // export from the previous one's second completion without being told.
+  await emit("quadrantExportStarted");
   await invoke("export_modpack_to", {
     modpack: name,
     destination,

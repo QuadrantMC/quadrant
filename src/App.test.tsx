@@ -294,6 +294,19 @@ describe("App transfer progress", () => {
     expect(hosts.clearProgressBar).toHaveBeenCalled();
   });
 
+  it("reports an export whose first event already completes it", async () => {
+    await renderApp();
+    await waitFor(() =>
+      expect(hosts.listeners.quadrantExportStarted).toBeTypeOf("function"),
+    );
+
+    await emit("quadrantExportProgress", 1);
+    await emit("quadrantExportStarted", 0);
+    await emit("quadrantExportProgress", 1);
+
+    expect(history()).toEqual(["2"]);
+  });
+
   it("reports the next export as finished too", async () => {
     await renderApp();
     await waitFor(() =>

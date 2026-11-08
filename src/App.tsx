@@ -203,6 +203,14 @@ function App() {
       // The host reports completion once per file and again when it finishes,
       // so only the first completion of an export earns the success message.
       let exportCompleted = false;
+      const exportStartedUnlisten = await listen("quadrantExportStarted", () => {
+        exportCompleted = false;
+      });
+      if (isUnmounted) {
+        exportStartedUnlisten();
+      } else {
+        cleanupFns.push(exportStartedUnlisten);
+      }
       const exportProgressUnlisten = await listen(
         "quadrantExportProgress",
         async (e: any) => {

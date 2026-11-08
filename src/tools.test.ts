@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModLoader, ModSource, ModType } from "./intefaces";
 
 const invoke = vi.fn();
+const emit = vi.fn();
 const platform = vi.fn();
 const openExternal = vi.fn();
 const openDialog = vi.fn();
@@ -12,6 +13,7 @@ const storeGet = vi.fn();
 
 vi.mock("./desktop", () => ({
   invoke: (...args: unknown[]) => invoke(...args),
+  emit: (...args: unknown[]) => emit(...args),
   platform: (...args: unknown[]) => platform(...args),
   openExternal: (...args: unknown[]) => openExternal(...args),
   openDialog: (...args: unknown[]) => openDialog(...args),
@@ -179,6 +181,16 @@ describe("exportModpack", () => {
     openDialog.mockResolvedValue(null);
     await exportModpack("pack");
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("announces the export before the host starts reporting progress", async () => {
+    openDialog.mockResolvedValue("/tmp/pack.zip");
+    invoke.mockResolvedValue(undefined);
+    await exportModpack("pack");
+    expect(emit).toHaveBeenCalledWith("quadrantExportStarted");
+    expect(emit.mock.invocationCallOrder[0]).toBeLessThan(
+      invoke.mock.invocationCallOrder[0],
+    );
   });
 
   it("invokes export with the chosen destination", async () => {
