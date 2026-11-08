@@ -20,7 +20,7 @@
 | Tauri dev without proprietary features | `bun tauri dev -- -- --no-default-features` |
 | Ad-hoc macOS DMG (no Apple cert) | `bun run tauri:macos:adhoc:build` |
 
-There is **no format/typecheck script** beyond `tsc` inside `bun run build`. Prettier runs via ESLint (`eslint-plugin-prettier`).
+There is **no format/typecheck script** beyond `tsc` inside `bun run build`. Formatting is not enforced by a tool.
 
 ## Repository layout
 
