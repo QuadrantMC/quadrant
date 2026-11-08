@@ -26,13 +26,8 @@ pub struct AppInfo {
     pub hardware_id: String,
     /// Submission timestamp.
     pub date: DateTime<Utc>,
-    /// ISO country code inferred from the public IP lookup.
-    pub country: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct MyIPResponse {
-    pub ip: String,
+    /// Always empty: the client no longer looks up its own IP. The API fills it
+    /// in from the edge when it can.
     pub country: String,
 }
 
@@ -45,8 +40,6 @@ pub async fn get_telemetry_info(
     let hardware_id = settings_store.get_string("hardwareId")?.unwrap_or_default();
     let date_time = Utc::now();
 
-    let country = fetch_country_code().await;
-
     Ok(AppInfo {
         version,
         os,
@@ -56,35 +49,8 @@ pub async fn get_telemetry_info(
         manual_input_usage: 0,
         hardware_id,
         date: date_time,
-        country,
+        country: String::new(),
     })
-}
-
-async fn fetch_country_code() -> String {
-    match provider_http_client()
-        .get("https://ipapi.co/json")
-        .send()
-        .await
-    {
-        Ok(response) => match response.error_for_status() {
-            Ok(response) => match response.json::<MyIPResponse>().await {
-                Ok(payload) if !payload.country.trim().is_empty() => payload.country,
-                Ok(_) => "unknown".to_string(),
-                Err(error) => {
-                    log::warn!("Failed to decode telemetry country lookup response: {error}");
-                    "unknown".to_string()
-                }
-            },
-            Err(error) => {
-                log::warn!("Telemetry country lookup failed: {error}");
-                "unknown".to_string()
-            }
-        },
-        Err(error) => {
-            log::warn!("Telemetry country lookup request failed: {error}");
-            "unknown".to_string()
-        }
-    }
 }
 
 /// Sends telemetry data when collection is enabled in settings.
@@ -133,4 +99,41 @@ pub async fn remove_telemetry(
         .error_for_status()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::*;
+
+    struct Settings;
+
+    impl SettingsStore for Settings {
+        fn get_value(&self, key: &str) -> Result<Option<Value>> {
+            Ok(match key {
+                "hardwareId" => Some(Value::String("hw-1".to_string())),
+                "modrinthUsage" => Some(Value::from(3)),
+                _ => None,
+            })
+        }
+
+        fn set_value(&self, _key: &str, _value: Value) -> Result<()> {
+            Ok(())
+        }
+
+        fn entries(&self) -> Result<Vec<(String, Value)>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_leaves_the_country_for_the_server() {
+        let info = get_telemetry_info(&Settings, "1.0.0".into(), "linux".into())
+            .await
+            .unwrap();
+        assert_eq!(info.country, "");
+        assert_eq!(info.hardware_id, "hw-1");
+        assert_eq!(info.modrinth_usage, 3);
+    }
 }
