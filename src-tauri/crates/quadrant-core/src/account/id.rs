@@ -680,6 +680,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn refused_refresh_token_clears_the_session() {
         let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
         let server = MockServer::start();
@@ -708,6 +709,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn failed_refresh_for_another_reason_keeps_the_session() {
         let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
         let server = MockServer::start();
@@ -733,6 +735,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn concurrent_refreshes_spend_the_refresh_token_once() {
         let _guard = crate::account::ACCOUNT_ENV_TEST_MUTEX.lock().unwrap();
         let server = MockServer::start();
