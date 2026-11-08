@@ -134,8 +134,6 @@ pub(crate) fn command_error(error: impl Into<anyhow::Error>) -> tauri::Error {
     quadrant_core::error::user_facing(error.into()).into()
 }
 
-/// Brings the window back for a later launch of either app and opens its
-/// links, as the launch would have.
 /// Brings the window up from the tray or a later launch. A window that is
 /// closing can refuse any step, which is logged instead of panicking the event
 /// loop.
@@ -154,6 +152,8 @@ fn show_window(window: &tauri::WebviewWindow) {
     }
 }
 
+/// Brings the window back for a later launch of either app and opens its
+/// links, as the launch would have.
 fn reveal(app: &tauri::AppHandle, links: &[String]) {
     // Not the links: a sign-in link carries an authorization code.
     log::info!("A later launch handed over {} link(s)", links.len());
@@ -577,7 +577,6 @@ pub async fn run(launch: Launch) {
             other::telemetry::send_telemetry,
             #[cfg(feature = "telemetry")]
             other::telemetry::remove_telemetry,
-            #[cfg(feature = "quadrant_id")]
             #[cfg(feature = "quadrant_id")]
             account::clear_account_token,
             #[cfg(feature = "quadrant_id")]

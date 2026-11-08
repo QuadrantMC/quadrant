@@ -442,7 +442,7 @@ async fn enrich_unnamed_mods(modpack: &mut InstalledModpack) -> bool {
     changed
 }
 
-// Writes what listing learned, names fetched for bare entries and the move
+/// Writes what listing learned, names fetched for bare entries and the move
 /// from `modConfig.json` to `modConfigV2.json`, onto the manifest as it is now:
 /// the fetches took a while, and another write may have landed meanwhile.
 fn record_listing_changes(
