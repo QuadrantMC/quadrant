@@ -62,7 +62,6 @@ const mod: IMod = {
 };
 
 const context = {
-  changePage: vi.fn(),
   changeContent: vi.fn(),
   back: vi.fn(),
   setSnackbar: vi.fn(),

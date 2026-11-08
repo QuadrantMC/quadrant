@@ -148,7 +148,6 @@ describe("ModpackView", () => {
         value={{
           back: goBack,
           changeContent: vi.fn(),
-          changePage: vi.fn(),
           setSnackbar: vi.fn(),
           setSnackbarNoState: vi.fn(),
         }}

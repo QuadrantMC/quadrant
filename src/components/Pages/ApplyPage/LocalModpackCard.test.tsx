@@ -54,7 +54,6 @@ function renderCard(
         back: () => {},
         setSnackbar,
         changeContent: () => {},
-        changePage: () => {},
         setSnackbarNoState: () => {},
       }}
     >

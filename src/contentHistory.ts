@@ -29,14 +29,6 @@ export function pushContent(
   ];
 }
 
-/** The history after switching to a top-level page. */
-export function pushPage(
-  history: PageWithScroll[],
-  page: Page,
-): PageWithScroll[] {
-  return [...history, { page, scrollPositionX: 0, scrollPositionY: 0 }];
-}
-
 /** The history after going back, or `null` when there is nowhere to go. */
 export function popContent(
   history: PageWithScroll[],

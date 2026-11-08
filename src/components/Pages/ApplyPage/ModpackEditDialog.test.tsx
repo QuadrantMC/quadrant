@@ -49,7 +49,6 @@ function renderDialog(
       value={{
         back: vi.fn(),
         changeContent: vi.fn(),
-        changePage: vi.fn(),
         setSnackbar,
         setSnackbarNoState: vi.fn(),
       }}

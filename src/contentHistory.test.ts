@@ -1,7 +1,7 @@
 /** @format */
 
 import { describe, expect, it } from "vitest";
-import { popContent, pushContent, pushPage } from "./contentHistory";
+import { popContent, pushContent, type PageWithScroll } from "./contentHistory";
 import type { Page } from "./intefaces";
 
 const page = (name: string): Page => ({
@@ -12,6 +12,10 @@ const page = (name: string): Page => ({
   style: "",
   main: false,
 });
+
+const only = (name: string): PageWithScroll[] => [
+  { page: page(name), scrollPositionX: 0, scrollPositionY: 0 },
+];
 
 describe("content history", () => {
   it("seeds the history with the page being left", () => {
@@ -28,7 +32,7 @@ describe("content history", () => {
   });
 
   it("records the scroll of the page being left, not of the new one", () => {
-    const start = pushPage([], page("search"));
+    const start = only("search");
 
     const history = pushContent(start, page("ignored"), page("mod"), {
       x: 0,
@@ -56,13 +60,13 @@ describe("content history", () => {
 
   it("has nowhere to go back to from the first page", () => {
     expect(popContent([])).toBeNull();
-    expect(popContent(pushPage([], page("apply")))).toBeNull();
+    expect(popContent(only("apply"))).toBeNull();
   });
 
   // The defect this module fixes: a `back` captured before the push used to
   // read a history that did not contain the pushed view, and did nothing.
   it("a push is visible to a back that was created before it", () => {
-    const ref = { current: [] as ReturnType<typeof pushPage> };
+    const ref = { current: [] as PageWithScroll[] };
     const back = () => popContent(ref.current);
 
     ref.current = pushContent(ref.current, page("apply"), page("details"), {

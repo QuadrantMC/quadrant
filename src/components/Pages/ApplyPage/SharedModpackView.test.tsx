@@ -92,7 +92,6 @@ describe("SharedModpackView", () => {
         value={{
           back,
           changeContent: vi.fn(),
-          changePage: vi.fn(),
           setSnackbar: vi.fn(),
           setSnackbarNoState: vi.fn(),
         }}

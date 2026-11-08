@@ -36,7 +36,6 @@ function wrapper({ children }: { children: ReactNode }) {
     <ContentContext.Provider
       value={{
         back: vi.fn(),
-        changePage: vi.fn(),
         changeContent: vi.fn(),
         setSnackbar,
         setSnackbarNoState: vi.fn(),

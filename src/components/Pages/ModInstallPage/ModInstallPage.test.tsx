@@ -95,7 +95,6 @@ function renderPage(props: {
         back,
         setSnackbar,
         changeContent: () => {},
-        changePage: () => {},
         setSnackbarNoState: () => {},
       }}
     >
@@ -672,7 +671,6 @@ describe("ModInstallPage", () => {
           back,
           setSnackbar,
           changeContent: () => {},
-          changePage: () => {},
           setSnackbarNoState: () => {},
         }}
       >

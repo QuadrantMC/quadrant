@@ -1,6 +1,6 @@
 /** @format */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ContentContext,
   type IContentContext,
@@ -9,12 +9,7 @@ import {
   type SnackbarHistoryItem,
   type SnackbarState,
 } from "./intefaces";
-import {
-  type PageWithScroll,
-  popContent,
-  pushContent,
-  pushPage,
-} from "./contentHistory";
+import { type PageWithScroll, popContent, pushContent } from "./contentHistory";
 import "./App.css";
 import { I18nextProvider, useTranslation } from "react-i18next";
 import ApplyPage from "./components/Pages/ApplyPage/Apply";
@@ -492,97 +487,6 @@ function App() {
     };
   }, []);
 
-  const updateContentWithTransition = (
-    update: () => void,
-    skipTransition = false,
-  ) => {
-    if (
-      !skipTransition &&
-      !isLinuxRef.current &&
-      typeof document.startViewTransition === "function"
-    ) {
-      document.startViewTransition(update);
-      return;
-    }
-
-    update();
-  };
-
-  const contextFunctions: IContentContext = {
-    back: async () => {
-      const popped = popContent(contentHistoryRef.current);
-      if (!popped) return;
-      const previousEntry = popped.entry;
-      contentHistoryRef.current = popped.history;
-
-      const leaving = currentContentRef.current;
-      currentContentRef.current = previousEntry.page;
-      updateContentWithTransition(() => {
-        setContent(previousEntry.page);
-      }, leaving.ownTransition === true);
-
-      // Wait a short time to ensure the new content is rendered before scrolling.
-      setTimeout(() => {
-        contentRef.current?.scrollTo({
-          top: Math.round(previousEntry.scrollPositionY),
-          left: Math.round(previousEntry.scrollPositionX),
-          behavior: "instant",
-        });
-      }, 50);
-    },
-    changeContent: (component) => {
-      const scrollPositionX = contentRef.current?.scrollLeft ?? 0;
-      const scrollPositionY = contentRef.current?.scrollTop ?? 0;
-      contentHistoryRef.current = pushContent(
-        contentHistoryRef.current,
-        currentContentRef.current,
-        component,
-        { x: scrollPositionX, y: scrollPositionY },
-      );
-      contentRef.current?.scrollTo({
-        top: 0,
-        left: 0,
-        behavior: "instant",
-      });
-      currentContentRef.current = component;
-      updateContentWithTransition(() => {
-        setContent(component);
-      }, component.ownTransition === true);
-    },
-    changePage: (name) => {
-      const newPage = pages.filter((pg) => pg.name === name);
-      if (!newPage[0]) {
-        return;
-      }
-      updateContentWithTransition(() => {
-        setPage(newPage[0]);
-        setContent(newPage[0]);
-      });
-      contentHistoryRef.current = pushPage(
-        contentHistoryRef.current,
-        newPage[0],
-      );
-      contentRef.current?.scrollTo({
-        top: 0,
-        left: 0,
-        behavior: "instant",
-      });
-    },
-    setSnackbar(newSnackBarState) {
-      setSnackbarState(newSnackBarState);
-      setSnackbarEnabled(true);
-
-      const id = Math.random().toString(36).substring(2, 10);
-      setSnackbarHistory((prevHistory) =>
-        appendSnackbarHistory(prevHistory, newSnackBarState, id),
-      );
-    },
-    setSnackbarNoState(newSnackBarState) {
-      setSnackbarState(newSnackBarState);
-      setSnackbarEnabled(true);
-    },
-  };
-
   const [snackbarState, setSnackbarState] = useState<SnackbarState>({
     message: "",
     className: "hidden",
@@ -590,6 +494,82 @@ function App() {
   });
 
   const [snackbarEnabled, setSnackbarEnabled] = useState<boolean>(false);
+
+  // Stable on purpose: this feeds every page through context, and the app
+  // re-renders on each download or export progress tick.
+  const contextFunctions = useMemo<IContentContext>(() => {
+    const updateContentWithTransition = (
+      update: () => void,
+      skipTransition = false,
+    ) => {
+      if (
+        !skipTransition &&
+        !isLinuxRef.current &&
+        typeof document.startViewTransition === "function"
+      ) {
+        document.startViewTransition(update);
+        return;
+      }
+
+      update();
+    };
+
+    return {
+      back: async () => {
+        const popped = popContent(contentHistoryRef.current);
+        if (!popped) return;
+        const previousEntry = popped.entry;
+        contentHistoryRef.current = popped.history;
+
+        const leaving = currentContentRef.current;
+        currentContentRef.current = previousEntry.page;
+        updateContentWithTransition(() => {
+          setContent(previousEntry.page);
+        }, leaving.ownTransition === true);
+
+        // Wait a short time to ensure the new content is rendered before scrolling.
+        setTimeout(() => {
+          contentRef.current?.scrollTo({
+            top: Math.round(previousEntry.scrollPositionY),
+            left: Math.round(previousEntry.scrollPositionX),
+            behavior: "instant",
+          });
+        }, 50);
+      },
+      changeContent: (component) => {
+        const scrollPositionX = contentRef.current?.scrollLeft ?? 0;
+        const scrollPositionY = contentRef.current?.scrollTop ?? 0;
+        contentHistoryRef.current = pushContent(
+          contentHistoryRef.current,
+          currentContentRef.current,
+          component,
+          { x: scrollPositionX, y: scrollPositionY },
+        );
+        contentRef.current?.scrollTo({
+          top: 0,
+          left: 0,
+          behavior: "instant",
+        });
+        currentContentRef.current = component;
+        updateContentWithTransition(() => {
+          setContent(component);
+        }, component.ownTransition === true);
+      },
+      setSnackbar(newSnackBarState) {
+        setSnackbarState(newSnackBarState);
+        setSnackbarEnabled(true);
+
+        const id = Math.random().toString(36).substring(2, 10);
+        setSnackbarHistory((prevHistory) =>
+          appendSnackbarHistory(prevHistory, newSnackBarState, id),
+        );
+      },
+      setSnackbarNoState(newSnackBarState) {
+        setSnackbarState(newSnackBarState);
+        setSnackbarEnabled(true);
+      },
+    };
+  }, []);
 
   useEffect(() => {
     if (snackbarEnabled) {

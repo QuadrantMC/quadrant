@@ -60,7 +60,7 @@ scripts/quadrant-node/   Node app consuming the N-API addon (quadrant-napi)
 - `src/tools.ts` is the app-facing API surface: it turns `invoke("command_name", args)` calls into typed functions used by pages. Start here to trace a UI action to its backend command.
 
 ### Navigation
-- **No router.** `App.tsx` holds a `pages: Page[]` array and swaps the active page via `useState` + a `changePage(name)` helper, with its own back/forward history stack. Deep links (mod install, shared modpack codes) mutate this state. Add a screen by adding an entry to the `pages` array.
+- **No router.** `App.tsx` holds a `pages: Page[]` array and swaps the active page via `useState`, with its own back/forward history stack. Deep links (mod install, shared modpack codes) mutate this state. Add a screen by adding an entry to the `pages` array.
 
 ### Rust workspace (`src-tauri/Cargo.toml`)
 Three crates, layered:
