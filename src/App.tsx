@@ -44,7 +44,7 @@ import {
   listen,
   onOpenUrl,
   platform,
-  ProgressBarStatus,
+  clearProgressBar,
   type UpdateSwitchPayload,
 } from "./desktop";
 import {
@@ -153,14 +153,13 @@ function App() {
           }
           const progressValue = Number(e.payload);
           setUpdateDownloadProgress(progressValue);
-          currentWindow.setProgressBar({
-            progress: Math.round(progressValue * 100),
-          });
-          if (progressValue === 1) {
-            currentWindow.setProgressBar({
-              progress: 0,
-              status: ProgressBarStatus.None,
-            });
+          if (progressValue === 0 || progressValue === 1) {
+            // Zero is how a failed download hands the taskbar back.
+            void clearProgressBar().catch(console.error);
+          } else {
+            void currentWindow
+              .setProgressBar({ progress: Math.round(progressValue * 100) })
+              .catch(console.error);
           }
         },
       );
@@ -184,41 +183,41 @@ function App() {
         cleanupFns.push(updateSwitchUnlisten);
       }
 
+      // The host reports completion once per file and again when it finishes,
+      // so only the first completion of an export earns the success message.
+      let exportCompleted = false;
       const exportProgressUnlisten = await listen(
         "quadrantExportProgress",
         async (e: any) => {
           if (isUnmounted) {
             return;
           }
-          console.log("Raw progress: " + e.payload);
           const progress = Math.round(e.payload * 100);
+          const message = (
+            <span className="flex">
+              <span>{quadrantLocale.t("export")}</span>
+              <md.MdArchive className="w-6 h-6 mx-2" /> {progress}%
+            </span>
+          );
 
-          console.log(progress);
-
-          currentWindow.setProgressBar({ progress: progress });
-          if (e.payload === 1) {
-            currentWindow.setProgressBar({
-              progress: 0,
-              status: ProgressBarStatus.None,
-            });
+          if (e.payload >= 1) {
+            void clearProgressBar().catch(console.error);
+            if (exportCompleted) {
+              return;
+            }
+            exportCompleted = true;
             contextFunctions.setSnackbar({
               className: "bg-emerald-600 rounded-4xl",
-              message: (
-                <span className="flex">
-                  <span>{t("export")}</span>
-                  <md.MdArchive className="w-6 h-6 mx-2" /> {progress}%
-                </span>
-              ),
+              message,
               timeout: 15000,
             });
           } else {
+            exportCompleted = false;
+            void currentWindow
+              .setProgressBar({ progress })
+              .catch(console.error);
             contextFunctions.setSnackbarNoState({
-              message: (
-                <span className="flex">
-                  <span>{t("export")}</span>
-                  <md.MdArchive className="w-6 h-6 mx-2" /> {progress}%
-                </span>
-              ),
+              message,
               className: "bg-slate-700 rounded-4xl",
               timeout: 500000,
             });
@@ -238,14 +237,12 @@ function App() {
             return;
           }
           const progress = Math.round(e.payload * 100);
-          currentWindow.setProgressBar({
-            progress: progress,
-          });
           if (progress >= 100) {
-            currentWindow.setProgressBar({
-              progress: 0,
-              status: ProgressBarStatus.None,
-            });
+            void clearProgressBar().catch(console.error);
+          } else {
+            void currentWindow
+              .setProgressBar({ progress })
+              .catch(console.error);
           }
         },
       );
@@ -641,14 +638,14 @@ function App() {
                             left: 0,
                             behavior: "instant",
                           });
-                        }}
-                      >
                           // Remembering the page must never hold up, or fail,
                           // the navigation itself.
                           config
                             .set("lastPageName", p.name)
                             .then(() => config.save())
                             .catch(console.error);
+                        }}
+                      >
                         <div className="grid place-content-center ">
                           {p.icon}
                         </div>

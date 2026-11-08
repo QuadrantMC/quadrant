@@ -6,14 +6,17 @@ import { type ReactNode } from "react";
 import { ContentContext, ModLoader } from "../../../intefaces";
 import { useModpackInstall } from "./useModpackInstall";
 
-const { installModpack, invoke, listeners, setSnackbar } = vi.hoisted(() => ({
-  installModpack: vi.fn(),
-  invoke: vi.fn(),
-  listeners: new Set<(event: { payload: number }) => void>(),
-  setSnackbar: vi.fn(),
-}));
+const { clearProgressBar, installModpack, invoke, listeners, setSnackbar } =
+  vi.hoisted(() => ({
+    clearProgressBar: vi.fn(async () => {}),
+    installModpack: vi.fn(),
+    invoke: vi.fn(),
+    listeners: new Set<(event: { payload: number }) => void>(),
+    setSnackbar: vi.fn(),
+  }));
 vi.mock("../../../tools", () => ({ installModpack }));
 vi.mock("../../../desktop", () => ({
+  clearProgressBar,
   invoke,
   listen: async (_event: string, cb: (event: { payload: number }) => void) => {
     listeners.add(cb);

@@ -4,7 +4,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ContentContext, InstalledModpack } from "../../../intefaces";
 import { installModpack } from "../../../tools";
-import { invoke, listen } from "../../../desktop";
+import { clearProgressBar, invoke, listen } from "../../../desktop";
 import { useReportError } from "../../../useReportError";
 
 // Progress events have no request id. Run these installs one at a time, even
@@ -96,6 +96,8 @@ export function useModpackInstall(
           timeout: 5000,
         });
       } catch (e: any) {
+        // A failed install leaves its last percentage on the taskbar.
+        void clearProgressBar().catch(console.error);
         reportError(e);
       } finally {
         activeRef.current = false;

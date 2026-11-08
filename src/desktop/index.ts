@@ -152,6 +152,15 @@ export async function isAutoupdateEnabled() {
   return withRuntime((runtime) => runtime.isAutoupdateEnabled());
 }
 
+/** Clears the taskbar progress that a transfer left behind when it failed. */
+export function clearProgressBar() {
+  return withRuntime((runtime) =>
+    runtime
+      .getWindow()
+      .setProgressBar({ progress: 0, status: ProgressBarStatus.None }),
+  );
+}
+
 export function getCurrentDesktopWindow() {
   return {
     minimize: () => withRuntime((runtime) => runtime.getWindow().minimize()),

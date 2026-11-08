@@ -39,6 +39,7 @@ import ModpackView from "../../shared/Pages/ModpackView";
 import CloudMembersPanel from "./CloudMembersPanel";
 import ModpackBadges from "./ModpackBadges";
 import { formatSyncDate } from "./syncDates";
+import { clearProgressBar } from "../../../desktop";
 import { isCloudSyncNewerError } from "../../../errors";
 import { useReportError } from "../../../useReportError";
 import PrismInstanceMenu from "./PrismInstanceMenu";
@@ -66,8 +67,8 @@ export default function LocalModpackCard({
   const reportError = useReportError();
   const context = useContext(ContentContext);
   const [isSyncConflictOpen, setIsSyncConflictOpen] = useState(false);
-
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+
   const dateString = t("localSyncDate", {
     date: formatSyncDate(modpack.lastSynced),
   });
@@ -218,6 +219,8 @@ export default function LocalModpackCard({
               // the user never sees the error.
               await exportModpack(modpack.name);
             } catch (e: any) {
+              // A failed export leaves its last percentage on the taskbar.
+              void clearProgressBar().catch(console.error);
               reportError(e);
             }
           }}
@@ -275,9 +278,6 @@ export default function LocalModpackCard({
           localName={modpack.name}
         />
       )}
-      <Dialog
-        open={isSyncConflictOpen}
-        onClose={() => setIsSyncConflictOpen(false)}
       <ConfirmDialog
         open={isDeleteOpen}
         title={t("confirmDeleteModpack", { name: modpack.name })}
@@ -298,6 +298,9 @@ export default function LocalModpackCard({
           }
         }}
       />
+      <Dialog
+        open={isSyncConflictOpen}
+        onClose={() => setIsSyncConflictOpen(false)}
         className={"relative z-50"}
       >
         <DialogBackdrop className="fixed inset-0 opacity-60 bg-slate-950/30" />
