@@ -146,8 +146,9 @@ export function useSyncedModpacks(): SyncedModpacksState {
       }
     };
 
+    // Subscribe before the first account read: that read can hang on a slow
+    // network, and a sign-in event raised meanwhile must not be lost.
     const effect = async () => {
-      await loadAccount();
       await subscribe("refreshSyncedModpacks", (payload) => {
         if (signedIn) {
           // The host sends an empty payload when it cannot name the pack.
@@ -155,6 +156,7 @@ export function useSyncedModpacks(): SyncedModpacksState {
         }
       });
       await subscribe("recheckAccountToken", () => void loadAccount());
+      await loadAccount();
     };
 
     effect().catch(console.error);

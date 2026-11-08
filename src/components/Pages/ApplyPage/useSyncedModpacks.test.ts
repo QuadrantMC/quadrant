@@ -274,6 +274,22 @@ describe("useSyncedModpacks", () => {
       );
     });
 
+    it("keeps a sign-in raised while the first account read is still pending", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      getAccountInfo.mockReturnValueOnce(new Promise(() => {}));
+      const view = renderHook(() => useSyncedModpacks());
+      await waitFor(() => expect(recheck).toBeTypeOf("function"));
+
+      getAccountInfo.mockResolvedValue({ login: "me", quadrant_sync_limit: 3 });
+      getSyncedModpacks.mockResolvedValue([cloudPack({ modpack_id: "a" })]);
+      await act(async () => recheck?.());
+
+      await waitFor(() =>
+        expect(ids(view.result.current.syncedModpacks)).toEqual(["a"]),
+      );
+      error.mockRestore();
+    });
+
     it("drops the previous account's packs when the user signs out", async () => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {});
       const view = await renderLoaded([cloudPack({ modpack_id: "a" })]);
