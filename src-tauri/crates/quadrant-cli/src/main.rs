@@ -155,7 +155,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("Error: {}", i18n::describe(error));
+            eprintln!("Error: {}", output::plain(&i18n::describe(error)));
             ExitCode::FAILURE
         }
     }

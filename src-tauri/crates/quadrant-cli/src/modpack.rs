@@ -550,10 +550,30 @@ pub async fn import(ctx: &Ctx, code: &str, name: Option<String>, yes: bool) -> R
     Ok(Report::message(format!("Installed {installed}.")))
 }
 
-/// Quotes an argument for a POSIX shell: single quotes keep everything
-/// literal, and an embedded `'` closes them, is escaped, and reopens them.
+/// Quotes an argument for the shell the hint is pasted into: PowerShell on
+/// Windows, a POSIX shell elsewhere.
 fn shell_quote(arg: &str) -> String {
-    format!("'{}'", arg.replace('\'', r"'\''"))
+    shell_quote_for(arg, cfg!(windows))
+}
+
+/// Single quotes keep everything literal in both. A POSIX shell ends them at
+/// the next `'`, so an embedded one closes, is escaped, and reopens them.
+/// PowerShell doubles it, and reads the typographic single quotes as quotes
+/// too. Control characters are dropped: a line break would split the command.
+fn shell_quote_for(arg: &str, powershell: bool) -> String {
+    let mut quoted = String::from("'");
+    for ch in arg.chars().filter(|ch| !ch.is_control()) {
+        match ch {
+            '\'' if !powershell => quoted.push_str(r"'\''"),
+            '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' if powershell => {
+                quoted.push(ch);
+                quoted.push(ch);
+            }
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 /// Asks before installing a pack whose files Quadrant can't vouch for: mods
@@ -828,9 +848,23 @@ mod tests {
 
     #[test]
     fn shell_quoting_keeps_arguments_literal() {
-        assert_eq!(shell_quote("Bob's Pack"), r"'Bob'\''s Pack'");
-        assert_eq!(shell_quote(r#"$HOME `x` "y""#), r#"'$HOME `x` "y"'"#);
-        assert_eq!(shell_quote(""), "''");
+        assert_eq!(shell_quote_for("Bob's Pack", false), r"'Bob'\''s Pack'");
+        assert_eq!(
+            shell_quote_for(r#"$HOME `x` "y""#, false),
+            r#"'$HOME `x` "y"'"#
+        );
+        assert_eq!(shell_quote_for("", false), "''");
+        assert_eq!(shell_quote_for("a\nb\x1b[2J", false), "'ab[2J'");
+    }
+
+    #[test]
+    fn powershell_quoting_doubles_every_kind_of_single_quote() {
+        assert_eq!(shell_quote_for("Bob's Pack", true), "'Bob''s Pack'");
+        assert_eq!(
+            shell_quote_for("a\u{2019}; x; \u{2018}b", true),
+            "'a\u{2019}\u{2019}; x; \u{2018}\u{2018}b'"
+        );
+        assert_eq!(shell_quote_for("$HOME `x`", true), "'$HOME `x`'");
     }
 
     #[test]

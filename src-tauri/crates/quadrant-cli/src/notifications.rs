@@ -6,7 +6,10 @@ use quadrant_core::account::id::{AccountInfo, Notification};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::{Ctx, config, output::Report};
+use crate::{
+    Ctx, config,
+    output::{Report, plain},
+};
 
 const MODPACK_SYNC: &str = "modpack_sync";
 const INVITE_TO_SYNC: &str = "invite_to_sync";
@@ -144,7 +147,7 @@ async fn watch(ctx: &Ctx) -> Result<Report> {
                         if ctx.out.json {
                             println!("{}", serde_json::to_string(&shown)?);
                         } else {
-                            println!("{}\n", describe(&shown));
+                            println!("{}\n", plain(&describe(&shown)));
                         }
                     }
                 }
@@ -152,7 +155,7 @@ async fn watch(ctx: &Ctx) -> Result<Report> {
                     if ctx.out.json {
                         println!("{}", serde_json::to_string(&event)?);
                     } else if let Some(text) = sync_warning_text(&event.payload) {
-                        println!("{text}\n");
+                        println!("{}\n", plain(&text));
                     }
                 }
                 Ok(_) | Err(RecvError::Lagged(_)) => {}

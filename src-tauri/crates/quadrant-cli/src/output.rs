@@ -64,7 +64,7 @@ impl Report {
                 .map(serde_json::to_string_pretty)
                 .transpose()?
         } else {
-            Some(self.human.trim_end().to_string()).filter(|text| !text.trim().is_empty())
+            Some(plain(self.human.trim_end())).filter(|text| !text.trim().is_empty())
         })
     }
 }
@@ -89,14 +89,14 @@ impl Output {
     /// A side remark on stderr, so it never mixes into `--json` output.
     pub fn note(&self, text: impl Display) {
         if !self.quiet {
-            eprintln!("{text}");
+            eprintln!("{}", plain(&text.to_string()));
         }
     }
 
     /// Something that failed while the command carried on. Unlike a note it
     /// shows under `--quiet`, since it is an error, not chatter.
     pub fn warn(&self, text: impl Display) {
-        eprintln!("{text}");
+        eprintln!("{}", plain(&text.to_string()));
     }
 
     /// Renders the host's progress events on stderr until the returned guard
@@ -177,7 +177,20 @@ fn progress_line(event: &HostEventEnvelope) -> Option<(String, bool)> {
         ),
         _ => return None,
     };
-    Some((format!("{label}: {percent:.0}%"), percent >= 100.0))
+    Some((
+        format!("{}: {percent:.0}%", plain(&label)),
+        percent >= 100.0,
+    ))
+}
+
+/// Text for a terminal. Mod titles, pack names and notification text come
+/// from other people, and a raw escape sequence in one could rewrite what
+/// the terminal shows, such as the line a confirmation asks about. Line
+/// breaks stay; every other control character goes.
+pub fn plain(text: &str) -> String {
+    text.chars()
+        .filter(|ch| *ch == '\n' || !ch.is_control())
+        .collect()
 }
 
 /// Cloud records store sync dates in seconds and local ones in milliseconds;
@@ -202,7 +215,7 @@ pub fn confirm(question: &str, yes: bool) -> Result<()> {
     if !std::io::stdin().is_terminal() {
         bail!("{question} Pass --yes to confirm.");
     }
-    eprint!("{question} [y/N] ");
+    eprint!("{} [y/N] ", plain(question));
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     match answer.trim().to_lowercase().as_str() {
@@ -285,6 +298,19 @@ mod tests {
         assert_eq!(message.rendered(false).unwrap().as_deref(), Some("Done."));
         assert_eq!(Report::streamed().rendered(true).unwrap(), None);
         assert_eq!(Report::streamed().rendered(false).unwrap(), None);
+    }
+
+    #[test]
+    fn terminal_text_loses_control_characters_but_keeps_lines() {
+        assert_eq!(
+            plain("Pack\x1b]0;x\x07\r\nnext\tline"),
+            "Pack]0;x\nnextline"
+        );
+        let report = Report::message("Install \x1b[2K\x1b[1AOK?");
+        assert_eq!(
+            report.rendered(false).unwrap().as_deref(),
+            Some("Install [2K[1AOK?")
+        );
     }
 
     #[test]
