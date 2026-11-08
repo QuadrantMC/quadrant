@@ -42,7 +42,7 @@ function pack(over: Record<string, unknown>) {
 beforeEach(() => {
   vi.clearAllMocks();
   getMinecraftFolder.mockResolvedValue("/mc");
-  joinPath.mockResolvedValue("/mc/mods");
+  joinPath.mockImplementation(async (...parts: string[]) => parts.join("/"));
   watch.mockResolvedValue(() => {});
 });
 
@@ -73,13 +73,24 @@ describe("CurrentModpackPage", () => {
     expect(screen.queryByTestId("modpack-view")).not.toBeInTheDocument();
   });
 
-  it("registers a filesystem watch on the mods folder", async () => {
+  // The mods link is replaced on apply and absent until a pack was ever
+  // applied, so it is never watched itself.
+  it("watches the Minecraft folder and the modpacks tree, not the mods link", async () => {
     getModpacks.mockResolvedValue([pack({})]);
     render(<CurrentModpackPage />);
-    await waitFor(() => expect(watch).toHaveBeenCalledTimes(1));
-    expect(watch).toHaveBeenCalledWith("/mc/mods", expect.any(Function), {
-      delayMs: 500,
+    await waitFor(() => expect(watch).toHaveBeenCalledTimes(2));
+    expect(watch).toHaveBeenCalledWith("/mc", expect.any(Function), {
+      delayMs: 50,
     });
+    expect(watch).toHaveBeenCalledWith("/mc/modpacks", expect.any(Function), {
+      delayMs: 50,
+      recursive: true,
+    });
+    expect(watch).not.toHaveBeenCalledWith(
+      "/mc/mods",
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it("tears down the watch on unmount", async () => {
@@ -88,16 +99,18 @@ describe("CurrentModpackPage", () => {
     getModpacks.mockResolvedValue([pack({})]);
 
     const { unmount } = render(<CurrentModpackPage />);
-    await waitFor(() => expect(watch).toHaveBeenCalled());
+    await waitFor(() => expect(watch).toHaveBeenCalledTimes(2));
     unmount();
-    await waitFor(() => expect(unwatch).toHaveBeenCalled());
+    await waitFor(() => expect(unwatch).toHaveBeenCalledTimes(2));
   });
 
   it("keeps the latest applied pack when watch refreshes resolve out of order", async () => {
     getModpacks.mockResolvedValue([pack({})]);
     render(<CurrentModpackPage />);
-    await waitFor(() => expect(watch).toHaveBeenCalled());
-    const refresh = watch.mock.calls[0][1];
+    await waitFor(() => expect(watch).toHaveBeenCalledTimes(2));
+    const refresh = watch.mock.calls.find(
+      ([path]) => path === "/mc/modpacks",
+    )![1];
     let first!: (value: ReturnType<typeof pack>[]) => void;
     let second!: (value: ReturnType<typeof pack>[]) => void;
     getModpacks
@@ -134,13 +147,13 @@ describe("CurrentModpackPage", () => {
         <CurrentModpackPage />
       </StrictMode>,
     );
-    await waitFor(() => expect(watch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(watch).toHaveBeenCalledTimes(2));
     await act(async () => first([pack({ name: "Obsolete Pack" })]));
     expect(screen.getByTestId("modpack-view")).toHaveTextContent(
       "Current Pack",
     );
-    expect(watch).toHaveBeenCalledTimes(1);
+    expect(watch).toHaveBeenCalledTimes(2);
     unmount();
-    expect(unwatch).toHaveBeenCalledTimes(1);
+    expect(unwatch).toHaveBeenCalledTimes(2);
   });
 });

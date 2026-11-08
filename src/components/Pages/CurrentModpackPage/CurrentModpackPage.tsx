@@ -5,7 +5,7 @@ import { getMinecraftFolder, getModpacks } from "../../../tools";
 import { LocalModpack } from "../../../intefaces";
 import ModpackView from "../../shared/Pages/ModpackView";
 import { motion } from "motion/react";
-import { joinPath, watch } from "../../../desktop";
+import { watchModpacks } from "../../../modpackWatch";
 
 export default function CurrentModpackPage() {
   const [currentModpack, setCurrentModpack] = useState<LocalModpack>();
@@ -21,47 +21,27 @@ export default function CurrentModpackPage() {
         setCurrentModpack(newModpack);
       }
     };
+    let unwatch: (() => void) | undefined;
     const effect = async () => {
       await updateModpack();
       if (cancelled) return;
 
-      const mcFolder = await joinPath(await getMinecraftFolder(false), "mods");
-      if (cancelled) return;
-
-      const unwatchMods = await watch(
-        mcFolder,
-        () => {
-          if (!cancelled) {
-            void updateModpack().catch(console.error);
-          }
-        },
-        {
-          delayMs: 500,
-        },
-      );
-
-      return unwatchMods;
-    };
-
-    let unwatch: (() => void | Promise<void>) | undefined;
-    effect()
-      .then((result) => {
-        if (result) {
-          if (!cancelled) {
-            unwatch = result;
-          } else {
-            result();
-          }
+      const stop = await watchModpacks(await getMinecraftFolder(false), () => {
+        if (!cancelled) {
+          void updateModpack().catch(console.error);
         }
-      })
-      .catch((error) => console.error(error));
-            key={currentModpack.name}
+      });
+      if (cancelled) {
+        stop();
+      } else {
+        unwatch = stop;
+      }
+    };
+    effect().catch((error) => console.error(error));
 
     return () => {
       cancelled = true;
-      if (unwatch) {
-        unwatch();
-      }
+      unwatch?.();
     };
   }, []);
 
@@ -75,6 +55,7 @@ export default function CurrentModpackPage() {
       >
         {currentModpack !== undefined ? (
           <ModpackView
+            key={currentModpack.name}
             isApplied={currentModpack.isApplied}
             lastSynced={currentModpack.lastSynced}
             modLoader={currentModpack.modLoader}
