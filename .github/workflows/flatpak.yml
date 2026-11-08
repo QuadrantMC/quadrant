@@ -54,11 +54,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          version="${TAG#v}"
-          if [ "$version" = "$TAG" ]; then
-            echo "Expected TAG to start with 'v', got: $TAG" >&2
+          # TAG and RELEASE_REPO come from a caller or a manual run and end up
+          # in a branch name, a release download and a pull request head.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+            echo "Expected TAG like v26.3.1-stable, got: $TAG" >&2
             exit 1
           fi
+          if ! [[ "$RELEASE_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "Expected RELEASE_REPO like owner/name, got: $RELEASE_REPO" >&2
+            exit 1
+          fi
+
+          version="${TAG#v}"
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
