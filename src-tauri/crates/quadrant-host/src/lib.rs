@@ -115,7 +115,6 @@ pub struct QuadrantHostOptions {
     pub oauth_client_secret: String,
     pub quadrant_api_key: String,
     pub config_store_name: String,
-    pub update_store_name: String,
     pub keyring_service_name: String,
     pub app_version: String,
     pub os_name: String,
@@ -137,7 +136,6 @@ impl QuadrantHostOptions {
             oauth_client_secret: oauth_client_secret.into(),
             quadrant_api_key: quadrant_api_key.into(),
             config_store_name: "config.json".to_string(),
-            update_store_name: "updateConfig.json".to_string(),
             keyring_service_name: KEYRING_SERVICE.to_string(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             os_name: std::env::consts::OS.to_uppercase(),
@@ -160,7 +158,6 @@ pub struct QuadrantHost {
 struct QuadrantHostInner {
     options: QuadrantHostOptions,
     config_store: JsonFileStore,
-    _update_store: JsonFileStore,
     secret_store: KeyringSecretStore,
     event_sink: HostEventBridge,
     runtime_state: AsyncMutex<HostRuntimeState>,
@@ -517,7 +514,6 @@ impl QuadrantHost {
         quadrant_core::account::set_backend_base_url_override(options.api_base_url.as_deref())?;
 
         let config_store = JsonFileStore::new(options.data_dir.join(&options.config_store_name))?;
-        let update_store = JsonFileStore::new(options.data_dir.join(&options.update_store_name))?;
         ensure_default_app_config(&config_store)?;
 
         quadrant_core::models::set_quadrant_version(options.app_version.clone());
@@ -538,7 +534,6 @@ impl QuadrantHost {
                 }),
                 worker_handles: AsyncMutex::new(WorkerHandles::default()),
                 config_store,
-                _update_store: update_store,
                 options,
             }),
         })

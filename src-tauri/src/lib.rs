@@ -30,7 +30,6 @@ pub mod other;
 pub mod tauri_adapter;
 
 pub struct AppState {
-    pub updated_modpacks: Vec<String>,
     pub is_update_enabled: bool,
     pub update: Option<tauri_plugin_updater::Update>,
     pub update_bytes: Vec<u8>,
@@ -234,7 +233,6 @@ pub async fn run(launch: Launch) {
 
     let builder = tauri::Builder::default()
         .manage(Mutex::new(AppState {
-            updated_modpacks: vec![],
             is_update_enabled: false,
             update: None,
             update_bytes: vec![],

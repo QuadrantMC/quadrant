@@ -15,7 +15,6 @@ pub struct QuadrantHostInit {
     pub oauth_client_secret: String,
     pub quadrant_api_key: String,
     pub config_store_name: Option<String>,
-    pub update_store_name: Option<String>,
     pub keyring_service_name: Option<String>,
     pub app_version: Option<String>,
     pub os_name: Option<String>,
@@ -42,9 +41,6 @@ impl QuadrantHostAddon {
         host_options.api_base_url = options.api_base_url;
         if let Some(value) = options.config_store_name {
             host_options.config_store_name = value;
-        }
-        if let Some(value) = options.update_store_name {
-            host_options.update_store_name = value;
         }
         if let Some(value) = options.keyring_service_name {
             host_options.keyring_service_name = value;
