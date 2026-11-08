@@ -810,7 +810,7 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), tauri::Error> {
         return Err(anyhow::anyhow!("No update available").into());
     }
     let update = update.unwrap();
-    let update_bytes = state.update_bytes.clone();
+    let update_bytes = std::mem::take(&mut state.update_bytes);
     update
         .install(update_bytes)
         .map_err(|e| tauri::Error::from(anyhow::Error::from(e)))?;
