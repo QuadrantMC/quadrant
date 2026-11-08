@@ -11,6 +11,7 @@ import { ContentContext } from "../../../intefaces";
 import {
   cancelOAuthServer,
   createDesktopStore,
+  emit,
   invoke,
   listen,
   onOAuthUrl,
@@ -124,7 +125,10 @@ export default function AccountPage() {
             onClick={async () => {
               await clearAccountToken();
               setLoginWarning(null);
-              updateAccountInfo(false);
+              // The bell and the cloud modpack list belong to the account
+              // that just left; they drop it when they hear this.
+              await emit("recheckAccountToken", null);
+              await updateAccountInfo(false);
             }}
           >
             {t("signout")}

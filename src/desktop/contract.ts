@@ -41,6 +41,8 @@ export interface RuntimeAdapter {
     event: string,
     listener: (event: DesktopBackendEventEnvelope<T>) => void,
   ): Promise<UnlistenFn>;
+  /** Raises a renderer-side event for every `listen` subscriber to hear. */
+  emit(event: string, payload?: unknown): Promise<void>;
   watch(
     targetPath: string,
     listener: () => void,

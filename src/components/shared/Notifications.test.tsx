@@ -71,11 +71,13 @@ function notification(
 // The callback registered for the "refreshNotifications" backend event, so a
 // test can push notifications the way the host would.
 let refreshNotifications: ((event: { payload: unknown }) => void) | undefined;
+let recheckAccount: (() => void) | undefined;
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
   refreshNotifications = undefined;
+  recheckAccount = undefined;
   getAccountInfo.mockResolvedValue({
     id: "1",
     name: "me",
@@ -92,6 +94,9 @@ beforeEach(() => {
     async (event: string, cb: (e: { payload: unknown }) => void) => {
       if (event === "refreshNotifications") {
         refreshNotifications = cb;
+      }
+      if (event === "recheckAccountToken") {
+        recheckAccount = () => cb({ payload: null });
       }
       return () => {};
     },
@@ -195,5 +200,54 @@ describe("Notifications", () => {
     const clearButton = await screen.findByRole("button", { name: /clear/i });
     await userEvent.click(clearButton);
     expect(setSnackbarHistory).toHaveBeenCalledWith([]);
+  });
+
+  it("subscribes to the backend before it waits for the settings read", async () => {
+    // An event raised while the settings read is pending must not be missed.
+    let finishRead!: (value: boolean) => void;
+    storeGet.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        finishRead = resolve;
+      }),
+    );
+    renderNotifications();
+
+    await waitFor(() => expect(refreshNotifications).toBeTypeOf("function"));
+    refreshNotifications?.({
+      payload: [notification({ message: "Raised early" })],
+    });
+    finishRead(true);
+
+    await openPanel();
+    expect(await screen.findByText("Raised early")).toBeInTheDocument();
+  });
+
+  it("drops the previous account's notifications when the user signs out", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    renderNotifications();
+    await waitFor(() => expect(recheckAccount).toBeTypeOf("function"));
+    refreshNotifications?.({
+      payload: [notification({ message: "For the old account" })],
+    });
+    await openPanel();
+    expect(await screen.findByText("For the old account")).toBeInTheDocument();
+
+    getAccountInfo.mockRejectedValue(new Error("signed out"));
+    recheckAccount?.();
+
+    await waitFor(() =>
+      expect(screen.queryByText("For the old account")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("highlights the bell while a notification is unread", async () => {
+    renderNotifications();
+    await waitFor(() => expect(refreshNotifications).toBeTypeOf("function"));
+    const bell = screen.getByRole("button");
+    expect(bell.className).toContain("bg-slate-700");
+
+    refreshNotifications?.({ payload: [notification({ read: false })] });
+
+    await waitFor(() => expect(bell.className).toContain("bg-red-700"));
   });
 });

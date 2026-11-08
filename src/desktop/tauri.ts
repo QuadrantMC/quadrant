@@ -1,5 +1,8 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { listen as tauriListen } from "@tauri-apps/api/event";
+import {
+  emit as tauriEmit,
+  listen as tauriListen,
+} from "@tauri-apps/api/event";
 import { getVersion, getTauriVersion } from "@tauri-apps/api/app";
 import {
   getCurrentWindow,
@@ -187,6 +190,9 @@ export const tauriRuntime: RuntimeAdapter = {
     listener: (event: Event<T>) => void,
   ) {
     return tauriListen<T>(event, listener);
+  },
+  async emit(event: string, payload?: unknown) {
+    await tauriEmit(event, payload);
   },
   async watch(targetPath: string, listener, options) {
     return watchPath(targetPath, listener, options);

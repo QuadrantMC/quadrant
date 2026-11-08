@@ -72,8 +72,6 @@ function Notifications({
   const configRef = useRef(createDesktopStore("config.json"));
   const config = configRef.current;
   const [notifications, setNotifications] = useState<AccountNotification[]>([]);
-  const [areNotificationsHighlighted, setAreNotificationsHighlighted] =
-    useState("bg-slate-700 hover:bg-slate-600");
   const [news, setNews] = useState<Article[]>([]);
   const [showModpackUpdateNotifications, setShowModpackUpdateNotifications] =
     useState(true);
@@ -108,15 +106,15 @@ function Notifications({
         } catch (error) {
           console.error("Failed to get account info", error);
           if (!isUnmounted) {
+            // Signed out: the previous account's notifications must go too.
             setAccountInfo(null);
+            setNotifications([]);
           }
         }
       };
 
-      setShowModpackUpdateNotifications(
-        (await config.get<boolean>("showModpackUpdateNotifications")) ?? true,
-      );
-
+      // Every subscription goes first: an event raised while an await below is
+      // pending would otherwise be missed until the next refresh.
       const refreshNotificationsUnlisten = await listen(
         "refreshNotifications",
         (event) => {
@@ -160,6 +158,9 @@ function Notifications({
         cleanupFns.push(accountRecheckUnlisten);
       }
 
+      setShowModpackUpdateNotifications(
+        (await config.get<boolean>("showModpackUpdateNotifications")) ?? true,
+      );
       await refreshAccountInfo();
 
       try {
@@ -219,15 +220,13 @@ function Notifications({
     return !currentIdentities.includes(updatedBy);
   });
 
-  useEffect(() => {
-    if (visibleNotifications.filter((n) => !n.read).length > 0) {
-      setAreNotificationsHighlighted("bg-red-700 hover:bg-red-600 ");
-    } else if (news.filter((n) => n.new).length > 0) {
-      setAreNotificationsHighlighted("bg-blue-600 hover:bg-blue-700 ");
-    } else {
-      setAreNotificationsHighlighted("bg-slate-700 hover:bg-slate-600 ");
-    }
-  }, [news, visibleNotifications]);
+  const areNotificationsHighlighted = visibleNotifications.some(
+    (notification) => !notification.read,
+  )
+    ? "bg-red-700 hover:bg-red-600 "
+    : news.some((article) => article.new)
+      ? "bg-blue-600 hover:bg-blue-700 "
+      : "bg-slate-700 hover:bg-slate-600 ";
 
   return (
     <Popover className="relative">

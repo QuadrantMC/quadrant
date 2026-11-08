@@ -117,6 +117,7 @@ export const browserRuntime: RuntimeAdapter = {
   async listen() {
     return () => {};
   },
+  async emit() {},
   async watch() {
     return () => {};
   },

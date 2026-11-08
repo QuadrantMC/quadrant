@@ -88,6 +88,10 @@ export async function listen<T = unknown>(
   return withRuntime((runtime) => runtime.listen<T>(event, listener));
 }
 
+export async function emit(event: string, payload?: unknown) {
+  return withRuntime((runtime) => runtime.emit(event, payload));
+}
+
 export async function watch(
   targetPath: string,
   listener: () => void,
