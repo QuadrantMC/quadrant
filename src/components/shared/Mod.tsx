@@ -92,6 +92,8 @@ export default function Mod(props: IModProps) {
   const failInstall = (e: unknown) => {
     installRequestedRef.current = false;
     installInFlightRef.current = false;
+    // The click handler ignores a card that still shows partial progress.
+    setProgress(-1);
     setClickableDownload(true);
     reportError(e);
   };
@@ -295,12 +297,16 @@ export default function Mod(props: IModProps) {
 
           {/* Actions */}
           <div className="flex items-center justify-end gap-2 mt-auto">
-            {mod.deleteable && (
+            {mod.deleteable && props.modpack !== undefined && (
               <Button
                 animate
                 onClick={async () => {
-                  await deleteMod(props.modpack ?? "free", mod.id);
-                  setVisible(false);
+                  try {
+                    await deleteMod(props.modpack!, mod.id);
+                    setVisible(false);
+                  } catch (e) {
+                    reportError(e);
+                  }
                 }}
                 className={actionButtonClass + " bg-slate-800 hover:bg-red-700"}
               >

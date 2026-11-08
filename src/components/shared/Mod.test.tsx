@@ -1,6 +1,6 @@
 /** @format */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -15,17 +15,19 @@ const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   installMod: vi.fn(),
   installPage: vi.fn(),
+  deleteMod: vi.fn(),
+  listen: vi.fn(),
 }));
 vi.mock("../../tools", () => ({
   installMod: mocks.installMod,
-  deleteMod: vi.fn(),
+  deleteMod: mocks.deleteMod,
   installRemoteFile: vi.fn(),
   openIn: vi.fn(),
   registerMod: vi.fn(),
 }));
 vi.mock("../../desktop", () => ({
   createDesktopStore: () => mocks,
-  listen: vi.fn(async () => vi.fn()),
+  listen: mocks.listen,
 }));
 vi.mock("../Pages/ModInstallPage/ModInstallPage", () => ({
   default: (props: unknown) => {
@@ -86,6 +88,7 @@ beforeEach(() => {
       })[key],
   );
   mocks.installMod.mockResolvedValue(undefined);
+  mocks.listen.mockImplementation(async () => vi.fn());
 });
 
 describe("Mod", () => {
@@ -299,5 +302,71 @@ describe("Mod", () => {
         }),
       ),
     );
+  });
+
+  it("lets a failed one-click install be retried after partial progress", async () => {
+    const handlers: Record<string, (event: unknown) => void> = {};
+    mocks.listen.mockImplementation(
+      async (name: string, cb: (event: unknown) => void) => {
+        handlers[name] = cb;
+        return vi.fn();
+      },
+    );
+    let fail!: (error: Error) => void;
+    mocks.installMod.mockReturnValueOnce(
+      new Promise((_, reject) => {
+        fail = reject;
+      }),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    render(
+      <ContentContext.Provider value={context}>
+        <Mod mod={mod} modpack={undefined} className="" />
+      </ContentContext.Provider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Download" }));
+    await waitFor(() => expect(handlers.modDownloadProgress).toBeDefined());
+    act(() =>
+      handlers.modDownloadProgress({ payload: { modId: mod.id, progress: 40 } }),
+    );
+    expect(await screen.findByRole("button", { name: "40%" })).toBeVisible();
+
+    await act(async () => fail(new Error("network")));
+
+    const retry = await screen.findByRole("button", { name: "Download" });
+    await userEvent.click(retry);
+    expect(mocks.installMod).toHaveBeenCalledTimes(2);
+  });
+
+  describe("delete", () => {
+    const deletable = { ...mod, deleteable: true };
+    const renderDeletable = (modpack: string | undefined) =>
+      render(
+        <ContentContext.Provider value={context}>
+          <Mod mod={deletable} modpack={modpack} className="" />
+        </ContentContext.Provider>,
+      );
+
+    it("removes the card once the mod is deleted from its modpack", async () => {
+      mocks.deleteMod.mockResolvedValue(undefined);
+      renderDeletable("Pack");
+      await userEvent.click(screen.getByRole("button", { name: /delete/i }));
+      expect(mocks.deleteMod).toHaveBeenCalledWith("Pack", mod.id);
+      await waitFor(() => expect(screen.queryByText("Example")).toBeNull());
+    });
+
+    it("keeps the card and reports the error when the delete fails", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      mocks.deleteMod.mockRejectedValue("errorFileInUse");
+      renderDeletable("Pack");
+      await userEvent.click(screen.getByRole("button", { name: /delete/i }));
+      await waitFor(() => expect(context.setSnackbar).toHaveBeenCalled());
+      expect(screen.getByText("Example")).toBeVisible();
+    });
+
+    it("never offers to delete from a modpack it was not given", () => {
+      renderDeletable(undefined);
+      expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+    });
   });
 });
