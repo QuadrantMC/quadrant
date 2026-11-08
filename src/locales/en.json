@@ -311,5 +311,8 @@
   "replaceModpackQuestion": "Replace {{name}}?",
   "replaceModpackText": "You already have a modpack named {{name}} on this computer. Installing this one replaces its mods, version and loader.",
   "replace": "Replace",
-  "datapack": "Data pack from {{source}}"
+  "datapack": "Data pack from {{source}}",
+  "modpackNameRequired": "Enter a name for the modpack.",
+  "modpackVersionRequired": "Pick a Minecraft version for the modpack.",
+  "modpackLoaderRequired": "Pick a mod loader for the modpack."
 }

@@ -317,5 +317,8 @@
   "replaceModpackQuestion": "Замінити {{name}}?",
   "replaceModpackText": "На цьому комп'ютері вже є модпак {{name}}. Встановлення цього замінить його моди, версію та завантажувач.",
   "replace": "Замінити",
-  "datapack": "Набір даних з {{source}}"
+  "datapack": "Набір даних з {{source}}",
+  "modpackNameRequired": "Введіть назву модпака.",
+  "modpackVersionRequired": "Виберіть версію Minecraft для модпака.",
+  "modpackLoaderRequired": "Виберіть завантажувач модів для модпака."
 }

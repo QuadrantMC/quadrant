@@ -1,6 +1,6 @@
 /** @format */
 
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import {
   ContentContext,
   LocalModpack,
@@ -26,6 +26,7 @@ import {
 } from "@headlessui/react";
 import LoaderOptions from "../../shared/LoaderOption";
 import { ModLoaderProvider } from "../../../modLoaders";
+import { useReportError } from "../../../useReportError";
 
 export interface ModpackEditDialogProps {
   open: boolean;
@@ -50,7 +51,9 @@ export default function ModpackEditDialog({
 }: ModpackEditDialogProps) {
   const { t } = useTranslation();
   const context = useContext(ContentContext);
+  const reportError = useReportError();
   const [draft, setDraft] = useState(initial);
+  const savingRef = useRef(false);
 
   // Re-seed on each open: the parent sets the target modpack and flips `open`
   // in the same handler, so opening is the only moment the draft is authoritative.
@@ -59,6 +62,43 @@ export default function ModpackEditDialog({
       setDraft(initial);
     }
   }, [open, initial]);
+
+  // A new pack needs a loader too; an existing one may predate that choice.
+  const invalidReason =
+    draft.name.trim().length === 0
+      ? t("modpackNameRequired")
+      : draft.version === ""
+        ? t("modpackVersionRequired")
+        : isCreate && draft.modLoader === ModLoader.Unknown
+          ? t("modpackLoaderRequired")
+          : null;
+
+  const save = async () => {
+    if (invalidReason !== null || savingRef.current) {
+      return;
+    }
+    savingRef.current = true;
+    try {
+      if (isCreate) {
+        await createModpack(draft.name, draft.version, draft.modLoader);
+        await onSaved();
+      } else {
+        await updateModpack(originalName, draft);
+        await onSaved();
+      }
+      context.setSnackbar({
+        message: draft.name + " | " + draft.version + " | " + draft.modLoader,
+        className: "bg-emerald-600 rounded-4xl",
+        timeout: 5000,
+      });
+      onClose();
+    } catch (e: any) {
+      // The dialog stays open so a taken or invalid name can be corrected.
+      reportError(e);
+    } finally {
+      savingRef.current = false;
+    }
+  };
 
   return (
     <Dialog open={open} onClose={onClose} className="relative z-50">
@@ -94,14 +134,11 @@ export default function ModpackEditDialog({
                     setDraft(modpack);
                   }}
                 >
-                  <option
-                    value={""}
-                    defaultChecked={"" == draft.version}
-                    className="rounded-4xl font-semibold"
-                    key={""}
-                  >
-                    -
-                  </option>
+                  {draft.version === "" && (
+                    <option value={""} className="rounded-4xl font-semibold">
+                      -
+                    </option>
+                  )}
                   {versions.map((version) => {
                     return (
                       <option
@@ -148,6 +185,11 @@ export default function ModpackEditDialog({
                   type="text"
                   value={draft.name}
                   autoComplete="off"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      void save();
+                    }
+                  }}
                   onChange={(newValue) => {
                     const modpack: LocalModpack = JSON.parse(
                       JSON.stringify(draft),
@@ -163,69 +205,14 @@ export default function ModpackEditDialog({
                 ></Input>
               </Field>
             </Fieldset>
+            {invalidReason !== null && (
+              <p className="text-sm text-slate-400">{invalidReason}</p>
+            )}
             <div className="flex gap-4">
               <Button
                 className="bg-emerald-600 hover:bg-emerald-700"
-                onClick={async () => {
-                  if (isCreate) {
-                    if (draft.name.trim().length === 0) {
-                      onClose();
-                      return;
-                    }
-                    if (draft.modLoader === ModLoader.Unknown) {
-                      onClose();
-                      return;
-                    }
-                    try {
-                      await createModpack(
-                        draft.name,
-                        draft.version,
-                        draft.modLoader,
-                      );
-                      context.setSnackbar({
-                        message:
-                          draft.name +
-                          " | " +
-                          draft.version +
-                          " | " +
-                          draft.modLoader,
-                        className: "bg-emerald-600 rounded-4xl",
-                        timeout: 5000,
-                      });
-                      await onSaved();
-                    } catch (e: any) {
-                      console.error(e);
-                      context.setSnackbar({
-                        message: t("invalidData"),
-                        className: "bg-red-700 rounded-4xl",
-                        timeout: 5000,
-                      });
-                    }
-                  } else {
-                    try {
-                      await updateModpack(originalName, draft);
-                      await onSaved();
-                      context.setSnackbar({
-                        message:
-                          draft.name +
-                          " | " +
-                          draft.version +
-                          " | " +
-                          draft.modLoader,
-                        className: "bg-emerald-600 rounded-4xl",
-                        timeout: 5000,
-                      });
-                    } catch (e: any) {
-                      console.error(e);
-                      context.setSnackbar({
-                        message: t("invalidData"),
-                        className: "bg-red-700 rounded-4xl",
-                        timeout: 5000,
-                      });
-                    }
-                  }
-                  onClose();
-                }}
+                disabled={invalidReason !== null}
+                onClick={save}
               >
                 {isCreate ? t("createModpack") : t("update")}
               </Button>

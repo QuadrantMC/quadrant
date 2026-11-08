@@ -311,5 +311,8 @@
   "replaceModpackQuestion": "{{name}} değiştirilsin mi?",
   "replaceModpackText": "Bu bilgisayarda zaten {{name}} adlı bir modpack var. Bunu kurmak onun modlarını, sürümünü ve yükleyicisini değiştirir.",
   "replace": "Değiştir",
-  "datapack": "{{source}} veri paketi"
+  "datapack": "{{source}} veri paketi",
+  "modpackNameRequired": "Modpack için bir ad girin.",
+  "modpackVersionRequired": "Modpack için bir Minecraft sürümü seçin.",
+  "modpackLoaderRequired": "Modpack için bir mod yükleyici seçin."
 }
