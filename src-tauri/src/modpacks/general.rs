@@ -122,7 +122,11 @@ mod tests {
             );
         }
         for refused in ["", "/", "/home/a/.."] {
-            assert_eq!(export_archive_path(PathBuf::from(refused)), None, "{refused}");
+            assert_eq!(
+                export_archive_path(PathBuf::from(refused)),
+                None,
+                "{refused}"
+            );
         }
     }
 }

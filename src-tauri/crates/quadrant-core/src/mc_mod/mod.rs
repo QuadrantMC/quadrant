@@ -312,8 +312,7 @@ pub(crate) fn check_provider_id(id: &str, numeric: bool) -> Result<&str> {
         && (numeric || !matches!(id, "." | ".."))
         && id.bytes().all(|byte| {
             byte.is_ascii_digit()
-                || (!numeric
-                    && (byte.is_ascii_alphabetic() || b"_-!@$()`.+,\"'".contains(&byte)))
+                || (!numeric && (byte.is_ascii_alphabetic() || b"_-!@$()`.+,\"'".contains(&byte)))
         });
     if valid {
         Ok(id)
