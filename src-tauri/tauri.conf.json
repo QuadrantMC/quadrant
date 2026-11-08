@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420 https: wss:; img-src 'self' asset: http://asset.localhost data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420 https: wss:; img-src 'self' asset: http://asset.localhost data: blob: https://cdn.modrinth.com https://media.forgecdn.net https://edge.forgecdn.net https://mediafilez.forgecdn.net; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'"
     },
     "trayIcon": {
       "iconPath": "../public/tray.png",

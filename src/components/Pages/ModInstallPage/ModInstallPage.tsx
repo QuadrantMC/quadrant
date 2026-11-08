@@ -20,12 +20,7 @@ import {
 } from "../../../intefaces";
 import Button from "../../core/Button";
 import CancelButton from "../../core/CancelButton";
-import {
-  MdDownload,
-  MdExtension,
-  MdOpenInNew,
-  MdPerson,
-} from "react-icons/md";
+import { MdDownload, MdExtension, MdOpenInNew, MdPerson } from "react-icons/md";
 import { animate, motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import {
@@ -46,6 +41,7 @@ import { loaderProvidersForSource } from "../../../modLoaders";
 import { findInstalledIn, isInstalledIn } from "../../../installedMods";
 import { isPackType, locationOptionLabel } from "../../../contentLocations";
 import { useReportError } from "../../../useReportError";
+import { remoteImageProps, trustedImageUrl } from "../../../imageHosts";
 
 export interface IModInstallPageProps {
   mod: IMod;
@@ -122,6 +118,7 @@ export default function ModInstallPage(props: IModInstallPageProps) {
   const [owners, setOwners] = useState<IModOwner[]>([]);
   const [deps, setDeps] = useState<IMod[]>([]);
   const [clipIcons, setClipIcons] = useState(true);
+  const iconUrl = trustedImageUrl(mod.modIconUrl);
   const [modInstallProgress, setModInstallProgress] = useState<number>(0);
   const [modDownloadProgress, setModDownloadProgress] = useState<number>(0);
   const [isInstalling, setIsInstalling] = useState(false);
@@ -420,14 +417,25 @@ export default function ModInstallPage(props: IModInstallPageProps) {
         <div className="flex flex-col gap-3 min-w-0">
           <section ref={detailsRef} className={panelClass}>
             <div className="flex items-start gap-4">
-              <img
-                src={mod.modIconUrl}
-                alt=""
-                className={
-                  "flex-none w-16 h-16 object-cover bg-slate-900 " +
-                  (clipIcons ? "rounded-full" : "rounded-2xl")
-                }
-              />
+              {iconUrl ? (
+                <img
+                  {...remoteImageProps}
+                  src={iconUrl}
+                  alt=""
+                  className={
+                    "flex-none w-16 h-16 object-cover bg-slate-900 " +
+                    (clipIcons ? "rounded-full" : "rounded-2xl")
+                  }
+                />
+              ) : (
+                <div
+                  aria-hidden="true"
+                  className={
+                    "flex-none w-16 h-16 object-cover bg-slate-900 " +
+                    (clipIcons ? "rounded-full" : "rounded-2xl")
+                  }
+                />
+              )}
               <div className="flex-1 min-w-0 flex flex-col gap-1">
                 <h2 className="text-xl font-black tracking-tight leading-tight text-wrap">
                   {mod.name}
@@ -476,15 +484,25 @@ export default function ModInstallPage(props: IModInstallPageProps) {
 
             {mod.thumbnailUrls.length > 0 && (
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2 mt-4">
-                {mod.thumbnailUrls.map((thumbnail) => (
-                  <img
-                    key={thumbnail}
-                    src={thumbnail}
-                    alt=""
-                    onClick={() => void openIn(thumbnail)}
-                    className="w-full aspect-video rounded-2xl object-cover bg-slate-900 cursor-pointer hover:brightness-110 transition-[filter]"
-                  />
-                ))}
+                {mod.thumbnailUrls.map((thumbnail) => {
+                  const src = trustedImageUrl(thumbnail);
+                  return src ? (
+                    <img
+                      {...remoteImageProps}
+                      key={thumbnail}
+                      src={src}
+                      alt=""
+                      onClick={() => void openIn(src)}
+                      className="w-full aspect-video rounded-2xl object-cover bg-slate-900 cursor-pointer hover:brightness-110 transition-[filter]"
+                    />
+                  ) : (
+                    <div
+                      key={thumbnail}
+                      aria-hidden="true"
+                      className="w-full aspect-video rounded-2xl bg-slate-900"
+                    />
+                  );
+                })}
               </div>
             )}
           </section>

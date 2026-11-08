@@ -34,6 +34,7 @@ import {
   subscribeModInstallProgress,
 } from "./modProgress";
 import { isInstallable, isPackType } from "../../contentLocations";
+import { remoteImageProps, trustedImageUrl } from "../../imageHosts";
 import { useReportError } from "../../useReportError";
 
 export interface IModProps {
@@ -72,6 +73,7 @@ export default function Mod(props: IModProps) {
   // card surfaces "open in web" for them instead of a download action.
   const installable = isInstallable(mod.modType);
   const description = mod.description.trim();
+  const iconUrl = trustedImageUrl(mod.modIconUrl);
 
   const [visible, setVisible] = useState(true);
   const [clickableDownload, setClickableDownload] = useState(true);
@@ -111,7 +113,7 @@ export default function Mod(props: IModProps) {
 
     context.changeContent({
       title: mod.name,
-      icon: <img src={mod.modIconUrl ?? null}></img>,
+      icon: iconUrl ? <img {...remoteImageProps} src={iconUrl} /> : <></>,
       // Keyed so opening a dependency from an install page remounts the page.
       content: (
         <ModInstallPage
@@ -142,14 +144,17 @@ export default function Mod(props: IModProps) {
       .catch(console.error);
 
     const stopDownload = subscribeModDownloadProgress(modId, setProgress);
-    const stopInstall = subscribeModInstallProgress(modId, (installProgress) => {
-      if (installProgress === 100) {
-        if (!isAutoinstallable) {
-          setVisible(false);
+    const stopInstall = subscribeModInstallProgress(
+      modId,
+      (installProgress) => {
+        if (installProgress === 100) {
+          if (!isAutoinstallable) {
+            setVisible(false);
+          }
+          setProgress(installProgress);
         }
-        setProgress(installProgress);
-      }
-    });
+      },
+    );
 
     return () => {
       isUnmounted = true;
@@ -201,9 +206,10 @@ export default function Mod(props: IModProps) {
         >
           {/* Header: icon tile + name/meta/description */}
           <div className="flex items-start gap-3">
-            {mod.modIconUrl && mod.modIconUrl.trim().length !== 0 ? (
+            {iconUrl ? (
               <img
-                src={mod.modIconUrl}
+                {...remoteImageProps}
+                src={iconUrl}
                 height="56px"
                 width="56px"
                 className={
@@ -345,8 +351,8 @@ export default function Mod(props: IModProps) {
                         // was scoped to, never to a saved or guessed one.
                         const installModpack =
                           mod.modType === ModType.Mod
-                            ? ((target?.name ??
-                                (await config.get<string>("lastUsedModpack"))) ??
+                            ? (target?.name ??
+                              (await config.get<string>("lastUsedModpack")) ??
                               "free")
                             : (target?.name ?? "");
                         await installMod({

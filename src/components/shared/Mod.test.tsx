@@ -91,6 +91,29 @@ beforeEach(() => {
 });
 
 describe("Mod", () => {
+  it("loads an icon only from a provider CDN, with no referrer", () => {
+    const { container, rerender } = render(
+      <Mod
+        mod={{ ...mod, modIconUrl: "https://cdn.modrinth.com/icon.png" }}
+        modpack={undefined}
+        className=""
+      />,
+    );
+    const img = container.querySelector("img");
+    expect(img).toHaveAttribute("src", "https://cdn.modrinth.com/icon.png");
+    expect(img).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(img).toHaveAttribute("loading", "lazy");
+
+    rerender(
+      <Mod
+        mod={{ ...mod, modIconUrl: "https://tracker.example/pixel.png" }}
+        modpack={undefined}
+        className=""
+      />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+  });
+
   it("installs search results using their explicit target instead of stale global settings", async () => {
     render(
       <Mod
