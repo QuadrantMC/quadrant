@@ -139,7 +139,8 @@ fn show_window(window: &tauri::WebviewWindow) {
 }
 
 fn reveal(app: &tauri::AppHandle, links: &[String]) {
-    log::info!("A later launch handed over {links:?}");
+    // Not the links: a sign-in link carries an authorization code.
+    log::info!("A later launch handed over {} link(s)", links.len());
     if let Some(window) = app.get_webview_window("main") {
         show_window(&window);
         if let Err(e) = window.center() {
@@ -386,7 +387,9 @@ pub async fn run(launch: Launch) {
             }
 
             if let Some(ref matches) = matches {
-                log::info!("Matches: {:?}", matches);
+                // The matches hold the launch's positional link, which a
+                // sign-in redirect fills with an authorization code.
+                log::info!("Launched with {} argument(s)", matches.args.len());
                 let autostart = matches.args.get_key_value("autostart");
                 if autostart.is_some() {
                     let autostart = autostart.unwrap();
