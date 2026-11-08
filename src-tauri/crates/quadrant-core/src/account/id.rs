@@ -260,8 +260,10 @@ pub async fn try_refresh_token(
     if is_refused_grant(status, &raw) {
         log::warn!("The refresh token was refused ({status}); clearing the session");
         clear_account_token(secret_store)?;
-        return Err(anyhow::anyhow!("Token refresh failed with {status}: the session has ended")
-            .context(crate::error::ErrorCode::SignedOut));
+        return Err(
+            anyhow::anyhow!("Token refresh failed with {status}: the session has ended")
+                .context(crate::error::ErrorCode::SignedOut),
+        );
     }
     let res: OAuth2Response =
         parse_json_body(status, &raw, "Token refresh failed", EMPTY_OAUTH_BODY)?;

@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, Once, OnceLock},
+    sync::{Arc, Mutex, Once},
     time::Duration,
 };
 
@@ -100,7 +100,9 @@ const MODPACK_SYNC_WARNING_EVENT: &str = "modpackSyncWarning";
 const MODPACK_SYNC_NOTIFICATION_TYPE: &str = "modpack_sync";
 const MODPACK_MEMBERSHIP_NOTIFICATION_TYPE: &str = "modpack_membership";
 static LOGGER_INIT: Once = Once::new();
-static KEYRING_STORE_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+/// Only success is remembered: the Secret Service can come up after an app
+/// that starts with the session, and a later call should find it.
+static KEYRING_STORE_READY: Mutex<bool> = Mutex::new(false);
 
 #[derive(Debug, Clone)]
 pub struct QuadrantHostOptions {
@@ -296,11 +298,21 @@ impl SecretStore for KeyringSecretStore {
 }
 
 fn ensure_keyring_store() -> Result<()> {
-    match KEYRING_STORE_INIT.get_or_init(|| init_keyring_store().map_err(|error| error.to_string()))
-    {
-        Ok(()) => Ok(()),
-        Err(error) => Err(anyhow!("failed to initialize keyring store: {error}").into()),
+    ensure_initialized(&KEYRING_STORE_READY, init_keyring_store)
+}
+
+fn ensure_initialized<E: std::fmt::Display>(
+    ready: &Mutex<bool>,
+    init: impl FnOnce() -> std::result::Result<(), E>,
+) -> Result<()> {
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !*ready {
+        init().map_err(|error| anyhow!("failed to initialize keyring store: {error}"))?;
+        *ready = true;
     }
+    Ok(())
 }
 
 fn init_keyring_store() -> std::result::Result<(), KeyringError> {
@@ -2854,6 +2866,25 @@ mod tests {
         path::{Path, PathBuf},
     };
     use tempfile::tempdir;
+
+    #[test]
+    fn keyring_initialization_is_retried_until_it_succeeds() {
+        let ready = std::sync::Mutex::new(false);
+        let mut calls = 0;
+        let mut init = |succeed: bool| {
+            calls += 1;
+            if succeed {
+                Ok(())
+            } else {
+                Err("no secret service")
+            }
+        };
+
+        assert!(super::ensure_initialized(&ready, || init(false)).is_err());
+        assert!(super::ensure_initialized(&ready, || init(true)).is_ok());
+        assert!(super::ensure_initialized(&ready, || init(false)).is_ok());
+        assert_eq!(calls, 2);
+    }
 
     #[test]
     fn failed_token_refreshes_back_off() {
