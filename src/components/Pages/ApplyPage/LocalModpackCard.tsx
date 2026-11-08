@@ -24,6 +24,7 @@ import {
 } from "@headlessui/react";
 import Button from "../../core/Button";
 import CancelButton from "../../core/CancelButton";
+import ConfirmDialog from "../../core/ConfirmDialog";
 import { motion } from "motion/react";
 import {
   MdArchive,
@@ -66,6 +67,7 @@ export default function LocalModpackCard({
   const context = useContext(ContentContext);
   const [isSyncConflictOpen, setIsSyncConflictOpen] = useState(false);
 
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const dateString = t("localSyncDate", {
     date: formatSyncDate(modpack.lastSynced),
   });
@@ -227,19 +229,7 @@ export default function LocalModpackCard({
           <MdArchive className="w-5 h-5 mx-2" />
         </Button>
         <Button
-          onClick={async () => {
-            try {
-              await deleteModpack(modpack.name);
-              await onChanged();
-              context.setSnackbar({
-                message: <MdDelete className="w-5 h-5 mx-2" />,
-                className: "bg-emerald-600 rounded-4xl",
-                timeout: 5000,
-              });
-            } catch (e: any) {
-              reportError(e);
-            }
-          }}
+          onClick={() => setIsDeleteOpen(true)}
           className={
             "flex items-center self-center bg-slate-800 hover:bg-red-700 px-4  w-max h-10 m-2 justify-center"
           }
@@ -288,6 +278,26 @@ export default function LocalModpackCard({
       <Dialog
         open={isSyncConflictOpen}
         onClose={() => setIsSyncConflictOpen(false)}
+      <ConfirmDialog
+        open={isDeleteOpen}
+        title={t("confirmDeleteModpack", { name: modpack.name })}
+        message={t("confirmDeleteModpackText")}
+        confirmLabel={t("delete")}
+        onCancel={() => setIsDeleteOpen(false)}
+        onConfirm={async () => {
+          try {
+            await deleteModpack(modpack.name);
+            await onChanged();
+            context.setSnackbar({
+              message: <MdDelete className="w-5 h-5 mx-2" />,
+              className: "bg-emerald-600 rounded-4xl",
+              timeout: 5000,
+            });
+          } catch (e: any) {
+            reportError(e);
+          }
+        }}
+      />
         className={"relative z-50"}
       >
         <DialogBackdrop className="fixed inset-0 opacity-60 bg-slate-950/30" />

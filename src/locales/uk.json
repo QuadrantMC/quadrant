@@ -304,5 +304,11 @@
   "installedContentCopySelectedLabel": "Скопіювати вибрані набори в інше місце",
   "installedContentDeleteSelected": "Видалити вибране",
   "installedContentDeleteSelectedConfirm": "Видалити {{amount}}?",
-  "errorContentMissing": "Цього набору більше немає в тій теці."
+  "errorContentMissing": "Цього набору більше немає в тій теці.",
+  "confirmDeleteModpack": "Видалити {{name}}?",
+  "confirmDeleteModpackText": "Модпак разом із його модами та налаштуваннями буде назавжди видалено з цього комп'ютера.",
+  "confirmDeleteSyncedModpack": "Видалити {{name}} з Quadrant Sync?",
+  "confirmDeleteSyncedModpackText": "Хмарну копію буде назавжди видалено для всіх учасників. Копії, встановлені на комп'ютерах, залишаться.",
+  "confirmKickMember": "Видалити {{username}}?",
+  "confirmKickMemberText": "{{username}} втратить доступ до {{name}} в Quadrant Sync."
 }

@@ -298,5 +298,11 @@
   "installedContentCopySelectedLabel": "Copy the selected packs somewhere else",
   "installedContentDeleteSelected": "Delete selected",
   "installedContentDeleteSelectedConfirm": "Delete {{amount}}?",
-  "errorContentMissing": "That pack is no longer in that folder."
+  "errorContentMissing": "That pack is no longer in that folder.",
+  "confirmDeleteModpack": "Delete {{name}}?",
+  "confirmDeleteModpackText": "This permanently removes the modpack with its mods and settings from this computer.",
+  "confirmDeleteSyncedModpack": "Delete {{name}} from Quadrant Sync?",
+  "confirmDeleteSyncedModpackText": "This permanently removes the cloud copy for every member. Copies installed on computers are kept.",
+  "confirmKickMember": "Remove {{username}}?",
+  "confirmKickMemberText": "{{username}} will lose access to {{name}} in Quadrant Sync."
 }

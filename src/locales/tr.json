@@ -298,5 +298,11 @@
   "installedContentCopySelectedLabel": "Seçilen paketleri başka bir yere kopyala",
   "installedContentDeleteSelected": "Seçilenleri sil",
   "installedContentDeleteSelectedConfirm": "{{amount}} tanesi silinsin mi?",
-  "errorContentMissing": "O paket artık o klasörde değil."
+  "errorContentMissing": "O paket artık o klasörde değil.",
+  "confirmDeleteModpack": "{{name}} silinsin mi?",
+  "confirmDeleteModpackText": "Bu işlem modpack'i, modlarını ve ayarlarını bu bilgisayardan kalıcı olarak kaldırır.",
+  "confirmDeleteSyncedModpack": "{{name}}, Quadrant Sync'ten silinsin mi?",
+  "confirmDeleteSyncedModpackText": "Bu işlem bulut kopyasını tüm üyeler için kalıcı olarak kaldırır. Bilgisayarlara kurulu kopyalar silinmez.",
+  "confirmKickMember": "{{username}} çıkarılsın mı?",
+  "confirmKickMemberText": "{{username}}, Quadrant Sync'te {{name}} modpack'ine erişimini kaybedecek."
 }

@@ -34,6 +34,7 @@ import { inviteMember, kickMember } from "../../../tools";
 import { invoke } from "../../../desktop";
 import Button from "../../core/Button";
 import CancelButton from "../../core/CancelButton";
+import ConfirmDialog from "../../core/ConfirmDialog";
 import { useModpackInstall } from "./useModpackInstall";
 import { useReportError } from "../../../useReportError";
 
@@ -64,6 +65,8 @@ export default function CloudMembersPanel({
   const [userToInvite, setUserToInvite] = useState<string>("");
   const [userToInviteAdmin, setUserToInviteAdmin] = useState<boolean>(false);
   const [openInviteDialog, setOpenInviteDialog] = useState(false);
+  const [memberToKick, setMemberToKick] = useState<string | null>(null);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
 
   const closeInviteDialog = () => {
     setOpenInviteDialog(false);
@@ -130,13 +133,7 @@ export default function CloudMembersPanel({
                           {canKick && (
                             <Button
                               className="bg-slate-700 hover:bg-red-700 px-4 mr-4"
-                              onClick={async () => {
-                                await kickMember(
-                                  modpack.modpack_id,
-                                  owner.username,
-                                );
-                                syncContext.refreshSyncedModpacks();
-                              }}
+                              onClick={() => setMemberToKick(owner.username)}
                             >
                               {t("kick")}
                             </Button>
@@ -164,26 +161,7 @@ export default function CloudMembersPanel({
                     )}
                     <Button
                       className="bg-slate-800 flex items-center justify-center hover:bg-red-700 flex-1"
-                      onClick={async () => {
-                        try {
-                          await invoke("delete_synced_modpack", {
-                            modpackId: modpack.modpack_id,
-                          });
-                          contentContext.setSnackbar({
-                            message: (
-                              <span className="flex items-center justify-center">
-                                <p>{t("delete")}</p>
-                                <MdDelete className="w-6 h-6 mx-2" />
-                              </span>
-                            ),
-                            className: "bg-emerald-600 font-bold",
-                            timeout: 5000,
-                          });
-                          syncContext.refreshSyncedModpacks();
-                        } catch (e: any) {
-                          reportError(e);
-                        }
-                      }}
+                      onClick={() => setIsDeleteOpen(true)}
                     >
                       {t("delete")}
                       <MdDelete className="w-6 h-6 mx-2" />
@@ -198,6 +176,52 @@ export default function CloudMembersPanel({
                   </div>
                 </motion.div>
               )}
+              <ConfirmDialog
+                open={memberToKick !== null}
+                title={t("confirmKickMember", { username: memberToKick })}
+                message={t("confirmKickMemberText", {
+                  username: memberToKick,
+                  name: modpack.name,
+                })}
+                confirmLabel={t("kick")}
+                onCancel={() => setMemberToKick(null)}
+                onConfirm={async () => {
+                  if (memberToKick === null) return;
+                  try {
+                    await kickMember(modpack.modpack_id, memberToKick);
+                    syncContext.refreshSyncedModpacks();
+                  } catch (e: any) {
+                    reportError(e);
+                  }
+                }}
+              />
+              <ConfirmDialog
+                open={isDeleteOpen}
+                title={t("confirmDeleteSyncedModpack", { name: modpack.name })}
+                message={t("confirmDeleteSyncedModpackText")}
+                confirmLabel={t("delete")}
+                onCancel={() => setIsDeleteOpen(false)}
+                onConfirm={async () => {
+                  try {
+                    await invoke("delete_synced_modpack", {
+                      modpackId: modpack.modpack_id,
+                    });
+                    contentContext.setSnackbar({
+                      message: (
+                        <span className="flex items-center justify-center">
+                          <p>{t("delete")}</p>
+                          <MdDelete className="w-6 h-6 mx-2" />
+                        </span>
+                      ),
+                      className: "bg-emerald-600 font-bold",
+                      timeout: 5000,
+                    });
+                    syncContext.refreshSyncedModpacks();
+                  } catch (e: any) {
+                    reportError(e);
+                  }
+                }}
+              />
               <Dialog
                 open={openInviteDialog}
                 onClose={closeInviteDialog}

@@ -1,7 +1,7 @@
 /** @format */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   ContentContext,
@@ -11,6 +11,7 @@ import {
 } from "../../../intefaces";
 
 const exportModpack = vi.fn();
+const deleteModpack = vi.fn();
 const applyModpackToPrismInstance = vi.fn();
 const detachPrismInstance = vi.fn();
 const getPrismSyncPlans = vi.fn();
@@ -20,7 +21,7 @@ vi.mock("../../../tools", () => ({
   applyModpack: vi.fn(),
   applyModpackToPrismInstance: (...a: unknown[]) =>
     applyModpackToPrismInstance(...a),
-  deleteModpack: vi.fn(),
+  deleteModpack: (...a: unknown[]) => deleteModpack(...a),
   detachPrismInstance: (...a: unknown[]) => detachPrismInstance(...a),
   exportModpack: (...a: unknown[]) => exportModpack(...a),
   getPrismSyncPlans: (...a: unknown[]) => getPrismSyncPlans(...a),
@@ -120,6 +121,62 @@ describe("LocalModpackCard", () => {
       expect(exportModpack).toHaveBeenCalledWith("Alpha Pack"),
     );
     expect(setSnackbar).not.toHaveBeenCalled();
+  });
+});
+
+describe("LocalModpackCard delete", () => {
+  const openDelete = () =>
+    userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+  const confirmDelete = () =>
+    userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Delete",
+      }),
+    );
+
+  it("asks first and removes nothing until the question is answered yes", async () => {
+    deleteModpack.mockResolvedValue(undefined);
+    const onChanged = vi.fn();
+    renderCard({ onChanged });
+
+    await openDelete();
+
+    expect(await screen.findByText("Delete Alpha Pack?")).toBeVisible();
+    expect(deleteModpack).not.toHaveBeenCalled();
+
+    await confirmDelete();
+    await waitFor(() =>
+      expect(deleteModpack).toHaveBeenCalledExactlyOnceWith("Alpha Pack"),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it("keeps the modpack when the question is cancelled", async () => {
+    renderCard();
+
+    await openDelete();
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+
+    expect(deleteModpack).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed delete", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    deleteModpack.mockRejectedValue("errorFileInUse");
+    renderCard();
+
+    await openDelete();
+    await confirmDelete();
+
+    await waitFor(() => expect(setSnackbar).toHaveBeenCalledTimes(1));
+    expect(setSnackbar.mock.calls[0][0]).toMatchObject({
+      className: expect.stringContaining("bg-red-700"),
+    });
+    error.mockRestore();
   });
 });
 
