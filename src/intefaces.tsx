@@ -184,6 +184,9 @@ export interface UniversalModFile {
   fileName: string;
   downloadUrl: string;
   sha1: string;
+  /** Modrinth publishes it, CurseForge doesn't. Pass the file to
+   *  `install_remote_file` unchanged so the host can check it. */
+  sha512?: string;
   size: number;
 }
 

@@ -1,7 +1,7 @@
 /** @format */
 
 import { useContext, useEffect, useMemo, useState } from "react";
-import { IMod, InstalledModpack } from "../../../intefaces";
+import { IMod, InstalledModpack, ModSource } from "../../../intefaces";
 import { useTranslation } from "react-i18next";
 import Button from "../../core/Button";
 import CancelButton from "../../core/CancelButton";
@@ -34,6 +34,10 @@ export default function SharedModpackView({
   // Online mods have no provider page, so the cards below can't show them;
   // the warnings list them with their hosts.
   const review = useMemo(() => reviewMods(modpack.mods), [modpack.mods]);
+  const providerMods = useMemo(
+    () => modpack.mods.filter((mod) => mod.source !== ModSource.Online),
+    [modpack.mods],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -42,7 +46,7 @@ export default function SharedModpackView({
       setIsLoading(true);
 
       const fetchMods = async () => {
-        for (const mod of modpack.mods) {
+        for (const mod of providerMods) {
           if (cancelled) return;
           try {
             const newMod = await getMod(
@@ -78,7 +82,7 @@ export default function SharedModpackView({
     return () => {
       cancelled = true;
     };
-  }, [modpack]);
+  }, [modpack, providerMods]);
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-3 px-4 pt-2 pb-5">
@@ -113,7 +117,7 @@ export default function SharedModpackView({
             />
             {t("loadingMods", {
               loaded: mods.length,
-              total: modpack.mods.length,
+              total: providerMods.length,
             })}
           </div>
         )}

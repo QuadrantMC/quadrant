@@ -35,7 +35,6 @@ export const HOST_COMMANDS = [
   "get_mod_modrinth",
   "get_mod_owners_modrinth",
   "get_mod_deps_modrinth",
-  "set_secret",
   "clear_account_token",
   "get_account_info",
   "oauth2_login",

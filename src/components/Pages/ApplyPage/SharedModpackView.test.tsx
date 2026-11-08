@@ -169,6 +169,15 @@ describe("SharedModpackView", () => {
       ).toBeVisible();
     });
 
+    it("looks up provider mods only and finishes loading without the linked one", async () => {
+      getMod.mockResolvedValue({ id: "old", name: "Old Mod card" });
+      render(<SharedModpackView modpack={risky} />);
+      expect(await screen.findByText("Old Mod card")).toBeVisible();
+      expect(getMod).toHaveBeenCalledOnce();
+      expect(getMod.mock.calls[0][1]).toBe(ModSource.Modrinth);
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
     it("installs only after the user confirms the warnings", async () => {
       render(<SharedModpackView modpack={risky} />);
       await userEvent.click(screen.getByRole("button", { name: "Download" }));
