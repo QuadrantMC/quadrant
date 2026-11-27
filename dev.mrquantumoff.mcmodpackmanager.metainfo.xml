@@ -49,6 +49,14 @@
 
   <releases>
 
+    <release date="2026-11-27" version="26.12.0">
+      <description>
+        <p>The usage statistics links in Settings open the new usage page on usequadrant.dev</p>
+        <p>A rewritten privacy policy that describes exactly what Quadrant collects</p>
+        <p>Updated dependencies</p>
+      </description>
+    </release>
+
     <release date="2026-11-08" version="26.11.2">
       <description>
         <p>Modpacks record a file hash for every mod, existing modpacks get theirs on first launch, and Quadrant warns before installing files it can't verify</p>
