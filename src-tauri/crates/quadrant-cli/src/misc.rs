@@ -92,9 +92,7 @@ pub async fn telemetry(command: TelemetryCommand, ctx: &Ctx) -> Result<Report> {
                     ["hardwareId".to_string(), hardware_id.clone()],
                     [
                         "dashboard".to_string(),
-                        format!(
-                            "https://mrquantumoff.dev/projects/quadrant/analytics/{hardware_id}"
-                        ),
+                        format!("https://usequadrant.dev/usage/{hardware_id}"),
                     ],
                 ])
             })

@@ -311,7 +311,7 @@ export default function SettingsPage() {
       <Button
         className="bg-slate-800 hover:bg-slate-700 w-fit my-4"
         onClick={async () => {
-          await openIn("https://mrquantumoff.dev/projects/quadrant/analytics");
+          await openIn("https://usequadrant.dev/usage");
         }}
       >
         {t("viewPublicUsage", { productName: t("productName") })}
@@ -320,7 +320,7 @@ export default function SettingsPage() {
         className="bg-slate-800 hover:bg-slate-700 w-fit my-4"
         onClick={async () => {
           await openIn(
-            "https://mrquantumoff.dev/projects/quadrant/analytics/" +
+            "https://usequadrant.dev/usage/" +
               (await box.get<string>("hardwareId")),
           );
         }}
